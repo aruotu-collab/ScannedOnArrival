@@ -18,6 +18,14 @@ import { consumeSharedFile, isDesktopLayout, isIos, isStandalone } from "./lib/p
 import { buildBackup, downloadBackup, parseBackupFile, restoreBackup } from "./lib/backup";
 import { enableNotifications, listAttention, maybeNotify, type AttentionItem } from "./lib/reminders";
 import { classifySmart } from "./lib/openai";
+import {
+  detectFromVideo,
+  drawScanOverlay,
+  flattenCapturedFrame,
+  flattenImageFile,
+  loadOpenCV,
+  type Quad,
+} from "./lib/detect";
 import { cropImageFile, enhanceDocument, stitchImages, type CropInsets } from "./lib/scan";
 import {
   clearAllData,
@@ -1320,7 +1328,13 @@ function AddDocumentModal({
   const [activePage, setActivePage] = useState(0);
   const [scanning, setScanning] = useState(false);
   const [crop, setCrop] = useState<CropInsets>(DEFAULT_CROP);
+  const [scanLock, setScanLock] = useState(false);
+  const [scanHint, setScanHint] = useState("Preparing the scanner…");
+  const [hasPage, setHasPage] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const overlayRef = useRef<HTMLCanvasElement | null>(null);
+  const cornersRef = useRef<Quad | null>(null);
+  const scanningRef = useRef(false);
   const ingested = useRef(false);
 
   useEffect(() => {
@@ -1354,6 +1368,64 @@ function AddDocumentModal({
     })();
     return () => {
       cancelled = true;
+    };
+  }, [step]);
+
+  useEffect(() => {
+    if (step !== "camera") {
+      setScanLock(false);
+      setHasPage(false);
+      setScanHint("Preparing the scanner…");
+      cornersRef.current = null;
+      return;
+    }
+    let alive = true;
+    let raf = 0;
+    let lastDetect = 0;
+    let goodStreak = 0;
+    setScanHint("Preparing the scanner…");
+    void (async () => {
+      try {
+        await loadOpenCV();
+        if (!alive) return;
+        setScanHint("Fit the whole page inside the frame.");
+      } catch (err) {
+        if (alive) setError(err instanceof Error ? err.message : "Could not start the scanner.");
+        return;
+      }
+      const tick = (now: number) => {
+        if (!alive) return;
+        const video = videoRef.current;
+        const overlay = overlayRef.current;
+        if (video && overlay && video.readyState >= 2 && video.videoWidth > 0) {
+          if (now - lastDetect > 140 && !scanningRef.current) {
+            lastDetect = now;
+            try {
+              const result = detectFromVideo(video);
+              goodStreak = result.locked ? goodStreak + 1 : 0;
+              const locked = goodStreak >= 2;
+              const shown = {
+                ...result,
+                locked,
+                hint: locked ? "Looking good — tap Capture." : result.hint,
+              };
+              cornersRef.current = shown.corners;
+              setHasPage(Boolean(shown.corners));
+              setScanLock(locked);
+              setScanHint(shown.hint);
+              drawScanOverlay(overlay, video, shown);
+            } catch {
+              setScanHint("Fit the whole page inside the frame.");
+            }
+          }
+        }
+        raf = requestAnimationFrame(tick);
+      };
+      raf = requestAnimationFrame(tick);
+    })();
+    return () => {
+      alive = false;
+      cancelAnimationFrame(raf);
     };
   }, [step]);
 
@@ -1486,36 +1558,43 @@ function AddDocumentModal({
     } finally {
       setBusy(false);
       setScanning(false);
+      scanningRef.current = false;
     }
   };
 
-  const openPage = (file: File) => {
+  const openPage = async (file: File) => {
     stopCamera();
-    void addCapturedPage(file);
+    setBusy(true);
+    setBusyLabel("Finding the page edges…");
+    try {
+      const flattened = await flattenImageFile(file);
+      await addCapturedPage(flattened);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not use that photo.");
+      setBusy(false);
+    }
   };
 
   const capturePhoto = async () => {
     const video = videoRef.current;
-    if (!video || scanning) return;
+    if (!video || scanningRef.current) return;
+    if (!cornersRef.current) {
+      setError("No page found yet. Lay the letter flat on a contrasting surface and fit it inside the frame.");
+      return;
+    }
+    scanningRef.current = true;
     setScanning(true);
     setError(null);
-    await new Promise((resolve) => window.setTimeout(resolve, 1400));
-    const canvas = document.createElement("canvas");
-    canvas.width = video.videoWidth || 1920;
-    canvas.height = video.videoHeight || 1080;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) {
+    try {
+      const file = await flattenCapturedFrame(video, cornersRef.current);
+      await new Promise((resolve) => window.setTimeout(resolve, 650));
+      stopCamera();
+      await addCapturedPage(file);
+    } catch (err) {
+      scanningRef.current = false;
       setScanning(false);
-      return;
+      setError(err instanceof Error ? err.message : "Could not see the page edges. Try again.");
     }
-    ctx.drawImage(video, 0, 0);
-    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.95));
-    if (!blob) {
-      setScanning(false);
-      return;
-    }
-    stopCamera();
-    await addCapturedPage(new File([blob], `scan-${todayIso()}-p${pages.length + 1}.jpg`, { type: "image/jpeg" }));
   };
 
   const finishScan = async (extra?: File) => {
@@ -1595,8 +1674,8 @@ function AddDocumentModal({
   };
 
   return (
-    <div className="modal-back" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+    <div className={`modal-back ${step === "camera" ? "scan-open" : ""}`} onClick={onClose}>
+      <div className={`modal ${step === "camera" ? "scan-screen" : ""}`} onClick={(e) => e.stopPropagation()}>
         {step === "choose" && (
           <>
             <h2>Add a document</h2>
@@ -1650,8 +1729,8 @@ function AddDocumentModal({
           <>
             <h2>Scan with your phone</h2>
             <p className="meta">
-              Hold one page in view, capture it, then crop or add the next page. A two-page letter can be one
-              document.
+              Lay one page flat on a contrasting surface. Line it up with the frame. The border turns green when
+              the page is ready — then tap Capture. The table stays out of the saved scan.
             </p>
             {pages.length > 0 && (
               <div className="page-thumbs">
@@ -1661,8 +1740,10 @@ function AddDocumentModal({
                 <span>{pages.length} page{pages.length === 1 ? "" : "s"} captured</span>
               </div>
             )}
-            <div className={`camera-wrap ${scanning ? "scanning" : ""}`}>
+            <div className={`camera-wrap ${scanning ? "scanning" : ""} ${scanLock ? "locked" : ""}`}>
               <video ref={videoRef} id="soa-camera" autoPlay playsInline muted />
+              <canvas ref={overlayRef} className="scan-overlay" />
+              <p className={`scan-hint ${scanLock ? "ok" : ""}`}>{scanHint}</p>
               {scanning && (
                 <>
                   <div className="scan-beam" />
@@ -1671,11 +1752,15 @@ function AddDocumentModal({
               )}
             </div>
             <div className="row" style={{ marginTop: 12 }}>
-              <button className="secondary" onClick={startCamera} disabled={scanning}>
+              <button className="secondary" onClick={() => void startCamera()} disabled={scanning}>
                 Allow camera
               </button>
-              <button className="primary" onClick={() => void capturePhoto()} disabled={scanning}>
-                {scanning ? "Scanning…" : "Capture"}
+              <button
+                className={`primary ${scanLock ? "ready" : ""}`}
+                onClick={() => void capturePhoto()}
+                disabled={scanning || !hasPage}
+              >
+                {scanning ? "Scanning…" : scanLock ? "Capture" : hasPage ? "Capture" : "Hold over the page"}
               </button>
               <label className="secondary" style={{ display: "inline-flex" }}>
                 Use the phone camera roll
@@ -1685,7 +1770,7 @@ function AddDocumentModal({
                   hidden
                   onChange={(e) => {
                     const file = e.target.files?.[0];
-                    if (file) openPage(file);
+                    if (file) void openPage(file);
                   }}
                 />
               </label>
