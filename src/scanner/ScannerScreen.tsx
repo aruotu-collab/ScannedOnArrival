@@ -16,11 +16,15 @@ import { scannerConfig } from "./scannerConfig";
 
 export function ScannerScreen({
   pageCount,
+  busy,
+  busyLabel,
   onClose,
   onCaptured,
   onPickFromLibrary,
 }: {
   pageCount: number;
+  busy?: boolean;
+  busyLabel?: string;
   onClose: () => void;
   onCaptured: (file: File) => Promise<void>;
   onPickFromLibrary: (file: File) => void;
@@ -229,7 +233,7 @@ export function ScannerScreen({
             <span className="scanner-icon-btn ghost" aria-hidden="true" />
           )}
         </div>
-        <p className={`scanner-guidance ${locked ? "ok" : ""}`}>{capturing ? "Capturing" : hint}</p>
+        <p className={`scanner-guidance ${locked ? "ok" : ""}`}>{capturing || busy ? busyLabel || "Saving this page…" : hint}</p>
         <p className="scanner-privacy">Private scan • processed on this device</p>
         <div className="scanner-bottom">
           <label className="scanner-text-btn">
@@ -239,16 +243,22 @@ export function ScannerScreen({
           <button
             className={`scanner-shutter ${locked ? "ready" : ""}`}
             type="button"
-            disabled={capturing}
+            disabled={capturing || busy}
             aria-label="Capture page"
             onClick={(event) => {
               event.stopPropagation();
               void capture();
             }}
           />
-          <span className="scanner-status">{locked ? "Ready" : "Manual"}</span>
+          <span className="scanner-status">{capturing || busy ? "Saving" : locked ? "Ready" : "Manual"}</span>
         </div>
       </div>
+      {(capturing || busy) && (
+        <div className="scanner-saving" role="status" aria-live="assertive">
+          <strong>{busyLabel || "Saving this page…"}</strong>
+          <span>Keep this tab open. The page is being cropped and stored on this device.</span>
+        </div>
+      )}
       {error && <p className="scanner-toast">{error}</p>}
     </div>
   );

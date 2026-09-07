@@ -102,6 +102,12 @@ export interface FoundEmailDoc {
   added: boolean;
 }
 
+export interface CustomTypeDef {
+  id: string;
+  label: string;
+  categoryId: string;
+}
+
 export interface AppSettings {
   privacyMode: PrivacyMode;
   inboxAddress: string;
@@ -111,6 +117,8 @@ export interface AppSettings {
   onboardingComplete: boolean;
   notificationsEnabled: boolean;
   openaiApiKey: string;
+  customCategories: CategoryDef[];
+  customTypes: CustomTypeDef[];
 }
 
 export interface AppState {

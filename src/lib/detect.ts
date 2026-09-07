@@ -45,6 +45,7 @@ type OpenCV = {
   CV_32FC2: number;
   INTER_LINEAR: number;
   BORDER_CONSTANT: number;
+  BORDER_REPLICATE: number;
   MORPH_RECT: number;
   getStructuringElement: (shape: number, size: unknown) => CvMat;
   imread: (source: HTMLCanvasElement | HTMLImageElement | HTMLVideoElement) => CvMat;
@@ -323,39 +324,68 @@ export function detectFromVideo(video: HTMLVideoElement): DetectResult {
   };
 }
 
+function expandQuad(quad: Quad, amount: number): Quad {
+  const cx = (quad.topLeft.x + quad.topRight.x + quad.bottomRight.x + quad.bottomLeft.x) / 4;
+  const cy = (quad.topLeft.y + quad.topRight.y + quad.bottomRight.y + quad.bottomLeft.y) / 4;
+  const grow = (point: { x: number; y: number }) => ({
+    x: point.x + (point.x - cx) * amount,
+    y: point.y + (point.y - cy) * amount,
+  });
+  return {
+    topLeft: grow(quad.topLeft),
+    topRight: grow(quad.topRight),
+    bottomRight: grow(quad.bottomRight),
+    bottomLeft: grow(quad.bottomLeft),
+  };
+}
+
 function warpPaper(source: HTMLCanvasElement, quad: Quad): HTMLCanvasElement {
   const api = opencv();
+  const padded = expandQuad(quad, 0.035);
   const width = Math.max(
     32,
-    Math.round(Math.max(dist(quad.topLeft, quad.topRight), dist(quad.bottomLeft, quad.bottomRight))),
+    Math.round(Math.max(dist(padded.topLeft, padded.topRight), dist(padded.bottomLeft, padded.bottomRight))),
   );
   const height = Math.max(
     32,
-    Math.round(Math.max(dist(quad.topLeft, quad.bottomLeft), dist(quad.topRight, quad.bottomRight))),
+    Math.round(Math.max(dist(padded.topLeft, padded.bottomLeft), dist(padded.topRight, padded.bottomRight))),
   );
   const maxEdge = 2000;
   const scale = Math.min(1, maxEdge / Math.max(width, height));
   const outW = Math.max(32, Math.round(width * scale));
   const outH = Math.max(32, Math.round(height * scale));
+  const padTop = Math.round(outH * 0.055);
+  const padSide = Math.round(outW * 0.03);
+  const padBottom = Math.round(outH * 0.03);
 
   const src = api.imread(source);
   const warped = new api.Mat();
   const srcTri = api.matFromArray(4, 1, api.CV_32FC2, [
-    quad.topLeft.x,
-    quad.topLeft.y,
-    quad.topRight.x,
-    quad.topRight.y,
-    quad.bottomLeft.x,
-    quad.bottomLeft.y,
-    quad.bottomRight.x,
-    quad.bottomRight.y,
+    padded.topLeft.x,
+    padded.topLeft.y,
+    padded.topRight.x,
+    padded.topRight.y,
+    padded.bottomLeft.x,
+    padded.bottomLeft.y,
+    padded.bottomRight.x,
+    padded.bottomRight.y,
   ]);
   const dstTri = api.matFromArray(4, 1, api.CV_32FC2, [0, 0, outW, 0, 0, outH, outW, outH]);
   const matrix = api.getPerspectiveTransform(srcTri, dstTri);
-  const canvas = document.createElement("canvas");
+  const paper = document.createElement("canvas");
+  paper.width = outW;
+  paper.height = outH;
   try {
-    api.warpPerspective(src, warped, matrix, new api.Size(outW, outH), api.INTER_LINEAR, api.BORDER_CONSTANT);
-    api.imshow(canvas, warped);
+    api.warpPerspective(src, warped, matrix, new api.Size(outW, outH), api.INTER_LINEAR, api.BORDER_REPLICATE);
+    api.imshow(paper, warped);
+    const canvas = document.createElement("canvas");
+    canvas.width = outW + padSide * 2;
+    canvas.height = outH + padTop + padBottom;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return paper;
+    ctx.fillStyle = "#fffbf4";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(paper, padSide, padTop);
     return canvas;
   } finally {
     src.delete();

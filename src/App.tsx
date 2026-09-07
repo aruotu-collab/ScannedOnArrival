@@ -3,13 +3,21 @@ import type {
   AddDraft,
   AppSettings,
   DocumentRecord,
+  DocumentTypeDef,
+  DocumentTypeId,
   FoundEmailDoc,
   InboxItem,
   LocationProvider,
   SourceKind,
   ViewId,
 } from "./types";
-import { CATEGORIES, DOCUMENT_TYPES, suggestedPath, typeById } from "./data/taxonomy";
+import {
+  allCategories,
+  allTypes,
+  setCatalogExtras,
+  suggestedPath,
+  typeById,
+} from "./data/taxonomy";
 import { SAMPLE_DOCUMENTS, SAMPLE_INBOX } from "./data/sample";
 import { computeStatus, freshnessLabel, providerLabel, storageVerb } from "./data/status";
 import { extractPdfText, isImage, isPdf } from "./lib/pdf";
@@ -46,9 +54,22 @@ const DEFAULT_SETTINGS: AppSettings = {
   onboardingComplete: false,
   notificationsEnabled: false,
   openaiApiKey: "",
+  customCategories: [],
+  customTypes: [],
 };
 
 const DEFAULT_CROP: CropInsets = { top: 4, right: 4, bottom: 4, left: 4 };
+
+function slugifyCatalogId(label: string, used: Set<string>): string {
+  const base = label.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "") || "category";
+  let id = base;
+  let n = 2;
+  while (used.has(id)) {
+    id = `${base}_${n}`;
+    n += 1;
+  }
+  return id;
+}
 
 function providerFromLabel(label: string): LocationProvider {
   const value = label.toLowerCase();
@@ -193,6 +214,7 @@ export default function App() {
   const [expandedTypeId, setExpandedTypeId] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [addStart, setAddStart] = useState<"choose" | "camera">("choose");
+  const [intendedTypeId, setIntendedTypeId] = useState<string | null>(null);
   const [incomingFile, setIncomingFile] = useState<File | null>(null);
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -208,7 +230,16 @@ export default function App() {
         ]);
         if (!alive) return;
         setDocuments(docs);
-        if (storedSettings) setSettings({ ...DEFAULT_SETTINGS, ...storedSettings });
+        if (storedSettings) {
+          const next = {
+            ...DEFAULT_SETTINGS,
+            ...storedSettings,
+            customCategories: storedSettings.customCategories ?? [],
+            customTypes: storedSettings.customTypes ?? [],
+          };
+          setCatalogExtras(next.customCategories, next.customTypes);
+          setSettings(next);
+        }
         setInbox(storedInbox.length ? storedInbox : SAMPLE_INBOX);
       } catch {
         if (!alive) return;
@@ -278,8 +309,41 @@ export default function App() {
   }, [hydrated]);
 
   const persistSettings = async (next: AppSettings) => {
-    setSettings(next);
-    await saveSettings(next);
+    const safe = {
+      ...next,
+      customCategories: next.customCategories ?? [],
+      customTypes: next.customTypes ?? [],
+    };
+    setCatalogExtras(safe.customCategories, safe.customTypes);
+    setSettings(safe);
+    await saveSettings(safe);
+  };
+
+  const openAdd = (start: "choose" | "camera", typeId?: string | null) => {
+    setIncomingFile(null);
+    setIntendedTypeId(typeId ?? null);
+    setAddStart(start);
+    setAddOpen(true);
+  };
+
+  const createCategory = async (label: string) => {
+    const trimmed = label.trim();
+    if (!trimmed) throw new Error("Enter a category name.");
+    const existing = allCategories().find((category) => category.label.toLowerCase() === trimmed.toLowerCase());
+    if (existing) {
+      const type = allTypes().find((item) => item.categoryId === existing.id) ?? typeById("other");
+      return { categoryId: existing.id, typeId: type.id };
+    }
+    const used = new Set([...allCategories().map((category) => category.id), ...allTypes().map((type) => type.id)]);
+    const categoryId = slugifyCatalogId(trimmed, used);
+    used.add(categoryId);
+    const typeId = slugifyCatalogId(`${trimmed}_docs`, used);
+    await persistSettings({
+      ...settings,
+      customCategories: [...(settings.customCategories ?? []), { id: categoryId, label: trimmed }],
+      customTypes: [...(settings.customTypes ?? []), { id: typeId, label: trimmed, categoryId }],
+    });
+    return { categoryId, typeId };
   };
 
   const persistDocs = async (next: DocumentRecord[]) => {
@@ -478,14 +542,7 @@ export default function App() {
               {view === "settings" && "Keep the privacy story clear. Local by default, convenience only if you choose it."}
             </p>
           </div>
-          <button
-            className="primary"
-            onClick={() => {
-              setIncomingFile(null);
-              setAddStart(isDesktopLayout() ? "choose" : "camera");
-              setAddOpen(true);
-            }}
-          >
+          <button className="primary" onClick={() => openAdd(isDesktopLayout() ? "choose" : "camera")}>
             Scan or add
           </button>
         </header>
@@ -504,11 +561,8 @@ export default function App() {
                 setExpandedTypeId(typeId);
                 if (documentId) setSelectedId(documentId);
               }}
-              onAdd={() => {
-                setIncomingFile(null);
-                setAddStart(isDesktopLayout() ? "choose" : "camera");
-                setAddOpen(true);
-              }}
+              onAdd={() => openAdd(isDesktopLayout() ? "choose" : "camera")}
+              onScan={(typeId) => openAdd("camera", typeId)}
               onDeleted={async (id) => {
                 await deleteDocument(id);
                 setDocuments(documents.filter((d) => d.id !== id));
@@ -525,6 +579,7 @@ export default function App() {
                 setExpandedTypeId(typeId);
                 if (documentId) setSelectedId(documentId);
               }}
+              onScan={(typeId) => openAdd("camera", typeId)}
               onDeleted={async (id) => {
                 await deleteDocument(id);
                 setDocuments(documents.filter((d) => d.id !== id));
@@ -594,8 +649,15 @@ export default function App() {
                 try {
                   const backup = await parseBackupFile(file);
                   const restored = await restoreBackup(backup, DEFAULT_SETTINGS);
+                  const nextSettings = {
+                    ...DEFAULT_SETTINGS,
+                    ...restored.settings,
+                    customCategories: restored.settings.customCategories ?? [],
+                    customTypes: restored.settings.customTypes ?? [],
+                  };
+                  setCatalogExtras(nextSettings.customCategories, nextSettings.customTypes);
                   setDocuments(restored.documents);
-                  setSettings(restored.settings);
+                  setSettings(nextSettings);
                   setInbox(restored.inbox.length ? restored.inbox : SAMPLE_INBOX);
                   setFoundEmail([]);
                   setToast(`Restored ${restored.documents.length} documents`);
@@ -627,14 +689,17 @@ export default function App() {
         <AddDocumentModal
           documents={documents}
           startAt={addStart}
+          intendedTypeId={intendedTypeId}
           incomingFile={incomingFile}
           openaiApiKey={settings.openaiApiKey}
           onClose={() => {
             setAddOpen(false);
             setIncomingFile(null);
+            setIntendedTypeId(null);
             setAddStart("choose");
           }}
           onSave={addDocument}
+          onCreateCategory={createCategory}
         />
       )}
       {toast && <div className="toast">{toast}</div>}
@@ -648,6 +713,7 @@ function ReadyView({
   expandedTypeId,
   onExpand,
   onAdd,
+  onScan,
   onDeleted,
 }: {
   documents: DocumentRecord[];
@@ -655,10 +721,11 @@ function ReadyView({
   expandedTypeId: string | null;
   onExpand: (typeId: string | null, documentId?: string) => void;
   onAdd: () => void;
+  onScan: (typeId: string) => void;
   onDeleted: (id: string) => void;
 }) {
   const current = documents.filter((d) => d.isCurrent);
-  const rows = DOCUMENT_TYPES.filter((t) => t.id !== "other").map((type) => {
+  const rows = allTypes().filter((t) => t.id !== "other").map((type) => {
     const doc = current.find((d) => d.typeId === type.id);
     const status = doc ? computeStatus(doc) : "missing";
     return { type, doc, status };
@@ -716,12 +783,13 @@ function ReadyView({
         </div>
       )}
       <TypeAccordion
-        types={DOCUMENT_TYPES.filter((type) => type.id !== "other")}
+        types={allTypes().filter((type) => type.id !== "other")}
         documents={documents}
         expandedTypeId={expandedTypeId}
         includeEmpty
         onExpand={onExpand}
         onAdd={onAdd}
+        onScan={onScan}
         onDeleted={onDeleted}
       />
     </>
@@ -735,14 +803,16 @@ function TypeAccordion({
   includeEmpty,
   onExpand,
   onAdd,
+  onScan,
   onDeleted,
 }: {
-  types: typeof DOCUMENT_TYPES;
+  types: DocumentTypeDef[];
   documents: DocumentRecord[];
   expandedTypeId: string | null;
   includeEmpty?: boolean;
   onExpand: (typeId: string | null, documentId?: string) => void;
   onAdd?: () => void;
+  onScan?: (typeId: string) => void;
   onDeleted: (id: string) => void;
 }) {
   const groups = types
@@ -769,10 +839,6 @@ function TypeAccordion({
             <button
               className="doc-type-head"
               onClick={() => {
-                if (!current && onAdd) {
-                  onAdd();
-                  return;
-                }
                 onExpand(open ? null : type.id, current?.id);
                 window.requestAnimationFrame(() => {
                   document.getElementById(`type-${type.id}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -780,29 +846,52 @@ function TypeAccordion({
               }}
             >
               <div>
-                <div className="kicker">{CATEGORIES.find((category) => category.id === type.categoryId)?.label}</div>
-                <h3>{type.label}</h3>
+                <div className="kicker">{allCategories().find((category) => category.id === type.categoryId)?.label}</div>
+                <h3>
+                  {type.label} <span className="doc-count">{copies.length}</span>
+                </h3>
                 <p className="meta">
-                  {current ? `${current.title} · ${freshnessLabel(current)}` : "No copy in your index yet. Tap to scan or add."}
+                  {copies.length === 0
+                    ? "No documents yet. Open to scan into this type."
+                    : current
+                      ? `${copies.length} ${copies.length === 1 ? "document" : "documents"} · ${freshnessLabel(current)}`
+                      : `${copies.length} ${copies.length === 1 ? "document" : "documents"}`}
                 </p>
               </div>
               <span className={`badge ${status}`}>
                 {status === "current" ? "Current" : status === "expiring" ? "Expiring" : status === "missing" ? "Missing" : status}
               </span>
             </button>
-            {open && current && (
-              <div className="doc-rail" aria-label={`${type.label} copies`}>
-                {copies.map((doc) => (
-                  <div key={doc.id} className="doc-slide">
-                    <DocumentDetail
-                      doc={doc}
-                      previous={copies.filter((item) => item.id !== doc.id && !item.isCurrent)}
-                      compact
-                      onDeleted={() => onDeleted(doc.id)}
-                    />
+            {open && (
+              <>
+                <div className="doc-type-toolbar">
+                  {onScan && (
+                    <button className="primary" type="button" onClick={() => onScan(type.id)}>
+                      Scan
+                    </button>
+                  )}
+                  {onAdd && (
+                    <button className="secondary" type="button" onClick={onAdd}>
+                      Add another way
+                    </button>
+                  )}
+                </div>
+                {copies.length === 0 && <p className="meta doc-type-empty">Nothing saved here yet.</p>}
+                {current && (
+                  <div className="doc-rail" aria-label={`${type.label} copies`}>
+                    {copies.map((doc) => (
+                      <div key={doc.id} className="doc-slide">
+                        <DocumentDetail
+                          doc={doc}
+                          previous={copies.filter((item) => item.id !== doc.id && !item.isCurrent)}
+                          compact
+                          onDeleted={() => onDeleted(doc.id)}
+                        />
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
+                )}
+              </>
             )}
           </section>
         );
@@ -816,34 +905,55 @@ function DocumentsView({
   allDocuments,
   expandedTypeId,
   onExpand,
+  onScan,
   onDeleted,
 }: {
   documents: DocumentRecord[];
   allDocuments: DocumentRecord[];
   expandedTypeId: string | null;
   onExpand: (typeId: string | null, documentId?: string) => void;
+  onScan: (typeId: string) => void;
   onDeleted: (id: string) => void;
 }) {
-  if (!documents.length) {
-    return (
-      <div className="card empty">
-        <h2>Nothing indexed yet</h2>
-        <p>
-          Scan a letter with your phone in this browser, upload a PDF, or reference a file you already keep in
-          iCloud, Drive or Downloads.
-        </p>
-      </div>
-    );
-  }
+  const catalog = allCategories()
+    .map((category) => {
+      const types = allTypes().filter(
+        (type) =>
+          type.categoryId === category.id && (type.id !== "other" || allDocuments.some((doc) => doc.typeId === "other")),
+      );
+      const count = allDocuments.filter((doc) => doc.categoryId === category.id).length;
+      return { category, types, count };
+    })
+    .filter((group) => group.types.length);
 
   return (
-    <TypeAccordion
-      types={DOCUMENT_TYPES.filter((type) => type.id !== "other" || allDocuments.some((doc) => doc.typeId === "other"))}
-      documents={allDocuments}
-      expandedTypeId={expandedTypeId}
-      onExpand={onExpand}
-      onDeleted={onDeleted}
-    />
+    <>
+      {documents.length === 0 && (
+        <div className="card empty">
+          <h2>Nothing indexed yet</h2>
+          <p>Tap a category below, then Scan. That type is selected before the camera opens.</p>
+        </div>
+      )}
+      {catalog.map((group) => (
+        <section key={group.category.id} className="doc-category">
+          <div className="doc-category-head">
+            <h2>{group.category.label}</h2>
+            <span className="meta">
+              {group.count} {group.count === 1 ? "document" : "documents"}
+            </span>
+          </div>
+          <TypeAccordion
+            types={group.types}
+            documents={allDocuments}
+            expandedTypeId={expandedTypeId}
+            includeEmpty
+            onExpand={onExpand}
+            onScan={onScan}
+            onDeleted={onDeleted}
+          />
+        </section>
+      ))}
+    </>
   );
 }
 
@@ -954,8 +1064,8 @@ function TreeView({
   onSelect: (id: string) => void;
 }) {
   const grouped = useMemo(() => {
-    return CATEGORIES.map((category) => {
-      const types = DOCUMENT_TYPES.filter((t) => t.categoryId === category.id);
+    return allCategories().map((category) => {
+      const types = allTypes().filter((t) => t.categoryId === category.id);
       return {
         category,
         types: types
@@ -978,14 +1088,17 @@ function TreeView({
       {grouped.map((group) => (
         <div key={group.category.id} className="tree-node">
           <div className="tree-row">
-            <span>├── {group.category.label}</span>
+            <span>
+              ├── {group.category.label} (
+              {group.types.reduce((sum, entry) => sum + entry.docs.length, 0)})
+            </span>
           </div>
           {group.types.map((entry, index) => (
             <div key={entry.type.id} className="tree-node" style={{ paddingLeft: 28 }}>
               <div className="tree-row">
                 <span>
                   {index === group.types.length - 1 ? "└── " : "├── "}
-                  {entry.type.folderName}
+                  {entry.type.folderName} ({entry.docs.length})
                 </span>
               </div>
               {entry.docs.map((doc, docIndex) => (
@@ -1317,17 +1430,21 @@ function SettingsView({
 function AddDocumentModal({
   documents,
   startAt,
+  intendedTypeId,
   incomingFile,
   openaiApiKey,
   onClose,
   onSave,
+  onCreateCategory,
 }: {
   documents: DocumentRecord[];
   startAt: "choose" | "camera";
+  intendedTypeId: string | null;
   incomingFile: File | null;
   openaiApiKey: string;
   onClose: () => void;
   onSave: (draft: AddDraft, makeCurrent: boolean) => Promise<void>;
+  onCreateCategory: (label: string) => Promise<{ categoryId: string; typeId: string }>;
 }) {
   const [step, setStep] = useState<"choose" | "camera" | "pages" | "crop" | "form" | "replace">(
     incomingFile ? "choose" : startAt,
@@ -1341,15 +1458,20 @@ function AddDocumentModal({
   const [pending, setPending] = useState<{ file: File; url: string } | null>(null);
   const [activePage, setActivePage] = useState(0);
   const [crop, setCrop] = useState<CropInsets>(DEFAULT_CROP);
+  const [newCategory, setNewCategory] = useState("");
+  const [creatingCategory, setCreatingCategory] = useState(false);
   const ingested = useRef(false);
+
+  const intendedType = intendedTypeId ? typeById(intendedTypeId) : null;
 
   const beginMethod = (method: SourceKind) => {
     const storageKind = method === "reference" ? "referenced" : "stored";
+    const type = intendedType ?? typeById("other");
     setDraft({
       method,
-      title: "",
-      typeId: "other",
-      categoryId: "other",
+      title: intendedType && intendedType.id !== "other" ? intendedType.label : "",
+      typeId: type.id,
+      categoryId: type.categoryId,
       period: "",
       issuedOn: "",
       expiresOn: "",
@@ -1363,6 +1485,17 @@ function AddDocumentModal({
 
   const applyClassification = (next: AddDraft) => {
     const classified = next.classified;
+    if (intendedType) {
+      return {
+        ...next,
+        title: classified?.title || intendedType.label,
+        typeId: intendedType.id,
+        categoryId: intendedType.categoryId,
+        period: classified?.period ?? next.period,
+        issuedOn: classified?.issuedOn ?? next.issuedOn,
+        expiresOn: classified?.expiresOn ?? next.expiresOn,
+      };
+    }
     if (!classified) return next;
     const type = typeById(classified.typeId);
     return {
@@ -1427,7 +1560,7 @@ function AddDocumentModal({
         mimeType: pagesToStore[0].type,
       });
       setDraft(next);
-      const canAuto = classified.typeId !== "other" && classified.confidence !== "low";
+      const canAuto = method !== "camera" && classified.typeId !== "other" && classified.confidence !== "low" && !intendedType;
       if (canAuto) {
         const match = documents.find((d) => d.typeId === next.typeId && d.isCurrent && d.typeId !== "other");
         if (match) {
@@ -1551,6 +1684,8 @@ function AddDocumentModal({
     return (
       <ScannerScreen
         pageCount={pages.length}
+        busy={busy}
+        busyLabel={busyLabel}
         onClose={() => {
           if (pages.length > 0) setStep("pages");
           else if (startAt === "camera") onClose();
@@ -1565,6 +1700,11 @@ function AddDocumentModal({
   return (
     <div className="modal-back" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
+        {(busy || error) && (
+          <div className={`modal-status ${error && !busy ? "warn" : ""}`} role="status" aria-live="polite">
+            {busy ? busyLabel : error}
+          </div>
+        )}
         {step === "choose" && (
           <>
             <h2>Add a document</h2>
@@ -1649,29 +1789,8 @@ function AddDocumentModal({
               />
               Use this scan
             </label>
-            <div className="row" style={{ marginTop: 12 }}>
-              <button
-                className="secondary"
-                onClick={() => {
-                  const remaining = pages.length - 1;
-                  setPages((current) => current.filter((_, index) => index !== activePage));
-                  setActivePage((index) => Math.max(0, index - 1));
-                  setStep(remaining <= 0 ? "camera" : "pages");
-                }}
-              >
-                Don’t use this one
-              </button>
-              <button
-                className="secondary"
-                onClick={() => {
-                  setPending({ file: pages[activePage].file, url: pages[activePage].url });
-                  setCrop(DEFAULT_CROP);
-                  setStep("crop");
-                }}
-              >
-                Crop
-              </button>
-              <button className="secondary" onClick={() => setStep("camera")}>
+            <div className="scan-pages-actions">
+              <button className="primary" onClick={() => setStep("camera")}>
                 Add another page
               </button>
               <button
@@ -1681,6 +1800,29 @@ function AddDocumentModal({
               >
                 {openaiApiKey ? "Identify and save" : "Save selected scans"}
               </button>
+              <div className="row">
+                <button
+                  className="secondary"
+                  onClick={() => {
+                    const remaining = pages.length - 1;
+                    setPages((current) => current.filter((_, index) => index !== activePage));
+                    setActivePage((index) => Math.max(0, index - 1));
+                    setStep(remaining <= 0 ? "camera" : "pages");
+                  }}
+                >
+                  Don’t use this one
+                </button>
+                <button
+                  className="secondary"
+                  onClick={() => {
+                    setPending({ file: pages[activePage].file, url: pages[activePage].url });
+                    setCrop(DEFAULT_CROP);
+                    setStep("crop");
+                  }}
+                >
+                  Crop
+                </button>
+              </div>
             </div>
           </>
         )}
@@ -1753,11 +1895,77 @@ function AddDocumentModal({
               <input value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} />
             </label>
             <label className="field">
+              <span>Category</span>
+              <select
+                value={creatingCategory ? "__new__" : draft.categoryId}
+                onChange={(e) => {
+                  if (e.target.value === "__new__") {
+                    setCreatingCategory(true);
+                    return;
+                  }
+                  setCreatingCategory(false);
+                  const categoryId = e.target.value;
+                  const types = allTypes().filter((type) => type.categoryId === categoryId);
+                  const keep = types.some((type) => type.id === draft.typeId);
+                  const nextType = keep ? typeById(draft.typeId) : types[0] ?? typeById("other");
+                  setDraft({
+                    ...draft,
+                    categoryId,
+                    typeId: nextType.id,
+                    title: draft.title || (draft.period ? `${nextType.label} ${draft.period}` : nextType.label),
+                  });
+                }}
+              >
+                {allCategories().map((category) => (
+                  <option key={category.id} value={category.id}>
+                    {category.label}
+                  </option>
+                ))}
+                <option value="__new__">Create a new category…</option>
+              </select>
+            </label>
+            {creatingCategory && (
+              <div className="row">
+                <label className="field" style={{ flex: 1 }}>
+                  <span>New category name</span>
+                  <input
+                    value={newCategory}
+                    onChange={(e) => setNewCategory(e.target.value)}
+                    placeholder="School, Pets, Work…"
+                  />
+                </label>
+                <button
+                  className="primary"
+                  type="button"
+                  disabled={!newCategory.trim()}
+                  onClick={() => {
+                    void (async () => {
+                      try {
+                        const created = await onCreateCategory(newCategory);
+                        setCreatingCategory(false);
+                        setNewCategory("");
+                        setDraft({
+                          ...draft,
+                          categoryId: created.categoryId,
+                          typeId: created.typeId as DocumentTypeId,
+                          title: draft.title || newCategory.trim(),
+                        });
+                      } catch (err) {
+                        setError(err instanceof Error ? err.message : "Could not create that category.");
+                      }
+                    })();
+                  }}
+                >
+                  Create
+                </button>
+              </div>
+            )}
+            <label className="field">
               <span>Document type</span>
               <select
                 value={draft.typeId}
                 onChange={(e) => {
-                  const type = typeById(e.target.value as AddDraft["typeId"]);
+                  const type = typeById(e.target.value);
                   setDraft({
                     ...draft,
                     typeId: type.id,
@@ -1766,11 +1974,13 @@ function AddDocumentModal({
                   });
                 }}
               >
-                {DOCUMENT_TYPES.map((type) => (
-                  <option key={type.id} value={type.id}>
-                    {type.label}
-                  </option>
-                ))}
+                {allTypes()
+                  .filter((type) => type.categoryId === draft.categoryId)
+                  .map((type) => (
+                    <option key={type.id} value={type.id}>
+                      {type.label}
+                    </option>
+                  ))}
               </select>
             </label>
             <label className="field">
@@ -1853,9 +2063,6 @@ function AddDocumentModal({
             </div>
           </>
         )}
-
-        {busy && <p className="meta">{busyLabel}</p>}
-        {error && <div className="notice warn">{error}</div>}
       </div>
     </div>
   );

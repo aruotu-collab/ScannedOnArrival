@@ -118,12 +118,35 @@ export const DOCUMENT_TYPES: DocumentTypeDef[] = [
   },
 ];
 
-export function typeById(id: DocumentTypeId): DocumentTypeDef {
-  return DOCUMENT_TYPES.find((t) => t.id === id) ?? DOCUMENT_TYPES[DOCUMENT_TYPES.length - 1];
+let extraCategories: CategoryDef[] = [];
+let extraTypes: DocumentTypeDef[] = [];
+
+export function setCatalogExtras(categories: CategoryDef[] = [], types: Array<{ id: string; label: string; categoryId: string }> = []) {
+  extraCategories = categories;
+  extraTypes = types.map((type) => ({
+    id: type.id as DocumentTypeId,
+    label: type.label,
+    categoryId: type.categoryId,
+    folderName: type.label,
+    keywords: [],
+    filenameHints: [],
+  }));
+}
+
+export function allCategories(): CategoryDef[] {
+  return [...CATEGORIES, ...extraCategories];
+}
+
+export function allTypes(): DocumentTypeDef[] {
+  return [...DOCUMENT_TYPES, ...extraTypes];
+}
+
+export function typeById(id: DocumentTypeId | string): DocumentTypeDef {
+  return allTypes().find((type) => type.id === id) ?? DOCUMENT_TYPES[DOCUMENT_TYPES.length - 1];
 }
 
 export function categoryLabel(id: string): string {
-  return CATEGORIES.find((c) => c.id === id)?.label ?? "Other";
+  return allCategories().find((category) => category.id === id)?.label ?? "Other";
 }
 
 export function suggestedPath(typeId: DocumentTypeId, period?: string): string {

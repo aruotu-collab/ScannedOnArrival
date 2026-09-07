@@ -88,7 +88,7 @@ export async function stitchImages(files: File[]): Promise<File> {
   canvas.height = heights.reduce((sum, height) => sum + height, 0) + gap * (images.length - 1);
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("Could not join those pages.");
-  ctx.fillStyle = "#111111";
+  ctx.fillStyle = "#fffbf4";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   let y = 0;
   images.forEach((image, index) => {

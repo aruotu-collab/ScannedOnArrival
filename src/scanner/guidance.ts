@@ -12,7 +12,7 @@ export function guidanceFromDetection(
   confidence: number,
   stable: boolean,
 ): Guidance {
-  const { minArea, maxArea, idealAreaMin, idealAreaMax, centreTolerance } = scannerConfig.geometry;
+  const { minArea, maxArea, centreTolerance } = scannerConfig.geometry;
   const { minConfidence } = scannerConfig.detection;
 
   if (!metrics || confidence < minConfidence) {
@@ -50,13 +50,6 @@ export function guidanceFromDetection(
   }
   if (!stable) {
     return { message: "Hold steady", ready: false, reason: "motion" };
-  }
-  if (metrics.areaRatio < idealAreaMin || metrics.areaRatio > idealAreaMax) {
-    return {
-      message: metrics.areaRatio < idealAreaMin ? "Move closer" : "Move further away",
-      ready: false,
-      reason: "size",
-    };
   }
   return { message: "Ready", ready: true, reason: "ready" };
 }
