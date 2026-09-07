@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type {
   AddDraft,
   AppSettings,
@@ -957,6 +958,86 @@ function DocumentsView({
   );
 }
 
+function isVisualImage(mimeType?: string, fileName?: string) {
+  const type = (mimeType || "").toLowerCase();
+  if (type.startsWith("image/")) return true;
+  if (type.includes("pdf")) return false;
+  return /\.(jpe?g|png|gif|webp|heic)$/i.test(fileName || "");
+}
+
+function FileViewer({
+  title,
+  pages,
+  startAt,
+  onClose,
+}: {
+  title: string;
+  pages: Array<{ url: string; image: boolean }>;
+  startAt: number;
+  onClose: () => void;
+}) {
+  const [index, setIndex] = useState(startAt);
+  const page = pages[index];
+
+  useEffect(() => {
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+      if (event.key === "ArrowRight") setIndex((current) => Math.min(pages.length - 1, current + 1));
+      if (event.key === "ArrowLeft") setIndex((current) => Math.max(0, current - 1));
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = previous;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [onClose, pages.length]);
+
+  if (!page) return null;
+
+  return createPortal(
+    <div className="file-viewer" role="dialog" aria-modal="true" aria-label={title}>
+      <div className="file-viewer-bar">
+        <button className="secondary" type="button" onClick={onClose}>
+          Close
+        </button>
+        <div>
+          <strong>{title}</strong>
+          {pages.length > 1 && (
+            <p className="meta">
+              Page {index + 1} of {pages.length}
+            </p>
+          )}
+        </div>
+      </div>
+      <div className="file-viewer-body">
+        {page.image ? (
+          <img src={page.url} alt={`${title} page ${index + 1}`} />
+        ) : (
+          <iframe title={title} src={page.url} />
+        )}
+      </div>
+      {pages.length > 1 && (
+        <div className="file-viewer-nav">
+          <button className="secondary" type="button" disabled={index === 0} onClick={() => setIndex((current) => current - 1)}>
+            Previous page
+          </button>
+          <button
+            className="secondary"
+            type="button"
+            disabled={index === pages.length - 1}
+            onClick={() => setIndex((current) => current + 1)}
+          >
+            Next page
+          </button>
+        </div>
+      )}
+    </div>,
+    document.body,
+  );
+}
+
 function DocumentDetail({
   doc,
   previous,
@@ -968,7 +1049,8 @@ function DocumentDetail({
   compact?: boolean;
   onDeleted: () => void;
 }) {
-  const [pageUrls, setPageUrls] = useState<string[]>([]);
+  const [pages, setPages] = useState<Array<{ url: string; image: boolean }>>([]);
+  const [viewerAt, setViewerAt] = useState<number | null>(null);
 
   useEffect(() => {
     let urls: string[] = [];
@@ -978,13 +1060,18 @@ function DocumentDetail({
       const blobs = await loadDocumentPages(doc.id, doc.pageCount ?? 1);
       if (!alive || blobs.length === 0) return;
       urls = blobs.map((blob) => URL.createObjectURL(blob));
-      setPageUrls(urls);
+      setPages(
+        blobs.map((blob, index) => ({
+          url: urls[index],
+          image: isVisualImage(blob.type || doc.mimeType, doc.fileName),
+        })),
+      );
     })();
     return () => {
       alive = false;
       urls.forEach((url) => URL.revokeObjectURL(url));
     };
-  }, [doc.id, doc.pageCount, doc.storageKind]);
+  }, [doc.fileName, doc.id, doc.mimeType, doc.pageCount, doc.storageKind]);
 
   return (
     <aside className="card doc-detail">
@@ -999,30 +1086,40 @@ function DocumentDetail({
         <span className={`badge ${computeStatus(doc)}`}>{computeStatus(doc)}</span>
         <span className={`badge ${doc.storageKind}`}>{storageVerb(doc)}</span>
       </div>
-      {pageUrls.length > 0 && (
+      {pages.length > 0 && (
         <>
-          <div className={`preview ${pageUrls.length > 1 ? "preview-pages" : ""}`} style={{ marginBottom: 12 }}>
-            {pageUrls.length === 1 ? (
-              doc.mimeType?.startsWith("image/") ? (
-                <img src={pageUrls[0]} alt={doc.title} />
-              ) : (
-                <iframe title={doc.title} src={pageUrls[0]} />
-              )
+          <div className={`preview ${pages.length > 1 ? "preview-pages" : ""}`} style={{ marginBottom: 12 }}>
+            {pages.length === 1 ? (
+              <button type="button" className="preview-open" aria-label={`View full file: ${doc.title}`} onClick={() => setViewerAt(0)}>
+                {pages[0].image ? (
+                  <img src={pages[0].url} alt={doc.title} />
+                ) : (
+                  <span className="preview-file">Open the full PDF</span>
+                )}
+              </button>
             ) : (
               <div className="page-rail" aria-label="Document pages">
-                {pageUrls.map((url, index) => (
+                {pages.map((page, index) => (
                   <figure key={`${doc.id}-page-${index}`} className="page-slide">
-                    <img src={url} alt={`${doc.title} page ${index + 1}`} />
-                    <figcaption>Page {index + 1} of {pageUrls.length}</figcaption>
+                    <button type="button" className="preview-open" onClick={() => setViewerAt(index)}>
+                      <img src={page.url} alt={`${doc.title} page ${index + 1}`} />
+                    </button>
+                    <figcaption>Page {index + 1} of {pages.length}</figcaption>
                   </figure>
                 ))}
               </div>
             )}
           </div>
-          {pageUrls.length > 1 && (
-            <p className="meta">Swipe to see the other {pageUrls.length === 2 ? "page" : `${pageUrls.length - 1} pages`}.</p>
+          <button type="button" className="secondary preview-full-btn" onClick={() => setViewerAt(0)}>
+            View full file
+          </button>
+          {pages.length > 1 && (
+            <p className="meta">Swipe to see the other {pages.length === 2 ? "page" : `${pages.length - 1} pages`}.</p>
           )}
         </>
+      )}
+      {viewerAt !== null && (
+        <FileViewer title={doc.title} pages={pages} startAt={viewerAt} onClose={() => setViewerAt(null)} />
       )}
       {doc.storageKind === "referenced" && (
         <div className="notice">
@@ -1460,6 +1557,7 @@ function AddDocumentModal({
   const [crop, setCrop] = useState<CropInsets>(DEFAULT_CROP);
   const [newCategory, setNewCategory] = useState("");
   const [creatingCategory, setCreatingCategory] = useState(false);
+  const [viewingPage, setViewingPage] = useState(false);
   const ingested = useRef(false);
 
   const intendedType = intendedTypeId ? typeById(intendedTypeId) : null;
@@ -1772,9 +1870,20 @@ function AddDocumentModal({
                 </button>
               ))}
             </div>
-            <div className="camera-wrap">
+            <button type="button" className="camera-wrap preview-open" onClick={() => setViewingPage(true)}>
               <img src={pages[activePage].url} alt={`Scan ${activePage + 1}`} />
-            </div>
+            </button>
+            <button type="button" className="secondary preview-full-btn" onClick={() => setViewingPage(true)}>
+              View full file
+            </button>
+            {viewingPage && (
+              <FileViewer
+                title={`Scan ${activePage + 1}`}
+                pages={pages.map((page) => ({ url: page.url, image: true }))}
+                startAt={activePage}
+                onClose={() => setViewingPage(false)}
+              />
+            )}
             <label className="scan-select">
               <input
                 type="checkbox"
