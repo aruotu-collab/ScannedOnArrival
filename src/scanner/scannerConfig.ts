@@ -7,15 +7,28 @@ export const scannerConfig = {
   },
   analysis: {
     previewWidth: 480,
-    intervalMs: 140,
+    intervalMs: 120,
+  },
+  detection: {
+    minContourArea: 0.1,
+    maxContourArea: 0.96,
+    minConfidence: 0.42,
   },
   geometry: {
     minArea: 0.35,
-    maxArea: 0.92,
+    maxArea: 0.9,
     idealAreaMin: 0.55,
     idealAreaMax: 0.85,
     edgeMargin: 0.04,
     centreTolerance: 0.12,
+    minPerspective: 0.72,
+  },
+  tracking: {
+    smoothAlpha: 0.32,
+    jumpFraction: 0.22,
+    missTolerance: 4,
+    stableFrames: 4,
+    stableFraction: 0.018,
   },
   capture: {
     burstCount: 5,

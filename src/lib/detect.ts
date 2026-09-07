@@ -1,13 +1,16 @@
 import { getVideoLayout, videoPointToDisplay } from "../scanner/coordinates";
+import {
+  analyzeQuad,
+  dist,
+  orderQuad,
+  scaleQuad,
+  scoreDocumentCandidate,
+  type Point,
+  type Quad,
+} from "../scanner/geometry";
+import { scannerConfig } from "../scanner/scannerConfig";
 
-export type Point = { x: number; y: number };
-
-export type Quad = {
-  topLeft: Point;
-  topRight: Point;
-  bottomRight: Point;
-  bottomLeft: Point;
-};
+export type { Point, Quad };
 
 export type DetectResult = {
   corners: Quad | null;
@@ -15,6 +18,8 @@ export type DetectResult = {
   hint: string;
   frameWidth: number;
   frameHeight: number;
+  confidence: number;
+  clipped?: boolean;
 };
 
 type CvMat = {
@@ -77,7 +82,6 @@ type OpenCV = {
 };
 
 const OPENCV_SRC = "https://docs.opencv.org/4.7.0/opencv.js";
-const DETECT_WIDTH = 480;
 
 let opencvPromise: Promise<void> | null = null;
 let workCanvas: HTMLCanvasElement | null = null;
@@ -160,50 +164,6 @@ function getWorkCanvas(width: number, height: number): HTMLCanvasElement {
   return workCanvas;
 }
 
-function dist(a: Point, b: Point): number {
-  return Math.hypot(a.x - b.x, a.y - b.y);
-}
-
-function orderQuad(points: Point[]): Quad {
-  const sorted = [...points].sort((a, b) => a.y - b.y || a.x - b.x);
-  const top = sorted.slice(0, 2).sort((a, b) => a.x - b.x);
-  const bottom = sorted.slice(2, 4).sort((a, b) => a.x - b.x);
-  return {
-    topLeft: top[0],
-    topRight: top[1],
-    bottomLeft: bottom[0],
-    bottomRight: bottom[1],
-  };
-}
-
-function scaleQuad(quad: Quad, scaleX: number, scaleY: number): Quad {
-  const map = (point: Point): Point => ({ x: point.x * scaleX, y: point.y * scaleY });
-  return {
-    topLeft: map(quad.topLeft),
-    topRight: map(quad.topRight),
-    bottomRight: map(quad.bottomRight),
-    bottomLeft: map(quad.bottomLeft),
-  };
-}
-
-function quadArea(quad: Quad): number {
-  const pts = [quad.topLeft, quad.topRight, quad.bottomRight, quad.bottomLeft];
-  let area = 0;
-  for (let i = 0; i < 4; i++) {
-    const a = pts[i];
-    const b = pts[(i + 1) % 4];
-    area += a.x * b.y - b.x * a.y;
-  }
-  return Math.abs(area) / 2;
-}
-
-function quadAspect(quad: Quad): number {
-  const width = Math.max(dist(quad.topLeft, quad.topRight), dist(quad.bottomLeft, quad.bottomRight));
-  const height = Math.max(dist(quad.topLeft, quad.bottomLeft), dist(quad.topRight, quad.bottomRight));
-  if (width < 1) return 0;
-  return height / width;
-}
-
 function readPoints(mat: CvMat): Point[] {
   const points: Point[] = [];
   const count = mat.rows;
@@ -245,58 +205,35 @@ function rectPoints(api: OpenCV, contour: CvMat): Point[] | null {
   }
 }
 
-function scoreQuad(quad: Quad, width: number, height: number): { locked: boolean; hint: string } {
-  const fill = quadArea(quad) / Math.max(1, width * height);
-  const aspect = quadAspect(quad);
-  const paperLike = (aspect >= 1.15 && aspect <= 1.9) || (aspect >= 0.52 && aspect <= 0.88);
-  const margin = 0.025;
-  const inset = [quad.topLeft, quad.topRight, quad.bottomLeft, quad.bottomRight].every(
-    (point) =>
-      point.x > width * margin &&
-      point.x < width * (1 - margin) &&
-      point.y > height * margin &&
-      point.y < height * (1 - margin),
-  );
-
-  if (fill < 0.18) return { locked: false, hint: "Move closer so the page fills more of the frame." };
-  if (fill > 0.9) return { locked: false, hint: "Move back a little so all four edges are visible." };
-  if (!inset) return { locked: false, hint: "Fit the whole page inside the frame." };
-  if (!paperLike) return { locked: false, hint: "Hold the phone square-on to the page." };
-  if (fill >= 0.24 && inset && paperLike) {
-    return { locked: true, hint: "Looking good — tap Capture." };
-  }
-  return { locked: false, hint: "Fit the whole page inside the frame." };
-}
-
-function findQuadsFromEdges(api: OpenCV, edges: CvMat, width: number, height: number): Quad | null {
+function findBestDocument(api: OpenCV, edges: CvMat, width: number, height: number): { quad: Quad; confidence: number } | null {
   const contours = new api.MatVector();
   const hierarchy = new api.Mat();
   api.findContours(edges, contours, hierarchy, api.RETR_LIST, api.CHAIN_APPROX_SIMPLE);
 
   const frameArea = width * height;
-  let best: Quad | null = null;
-  let bestArea = 0;
+  const { minContourArea, maxContourArea, minConfidence } = scannerConfig.detection;
+  let best: { quad: Quad; confidence: number } | null = null;
 
   for (let i = 0; i < contours.size(); i++) {
     const contour = contours.get(i);
     const area = api.contourArea(contour);
-    if (area < frameArea * 0.12 || area > frameArea * 0.96) {
+    if (area < frameArea * minContourArea || area > frameArea * maxContourArea) {
       contour.delete();
       continue;
     }
-    const points = approxQuad(api, contour) ?? (area > frameArea * 0.28 ? rectPoints(api, contour) : null);
+    const points = approxQuad(api, contour) ?? (area > frameArea * 0.22 ? rectPoints(api, contour) : null);
     contour.delete();
     if (!points) continue;
     const quad = orderQuad(points);
-    const quadA = quadArea(quad);
-    if (quadA > bestArea) {
-      best = quad;
-      bestArea = quadA;
+    const confidence = scoreDocumentCandidate(analyzeQuad(quad, width, height, scannerConfig.geometry.edgeMargin));
+    if (!best || confidence > best.confidence) {
+      best = { quad, confidence };
     }
   }
 
   contours.delete();
   hierarchy.delete();
+  if (!best || best.confidence < minConfidence) return null;
   return best;
 }
 
@@ -306,9 +243,10 @@ export function detectPaperOnCanvas(source: HTMLCanvasElement): DetectResult {
   const empty: DetectResult = {
     corners: null,
     locked: false,
-    hint: "Lay the page flat on a contrasting surface.",
+    hint: "Find the document",
     frameWidth: width,
     frameHeight: height,
+    confidence: 0,
   };
 
   const api = opencv();
@@ -324,15 +262,17 @@ export function detectPaperOnCanvas(source: HTMLCanvasElement): DetectResult {
     api.GaussianBlur(gray, blur, new api.Size(5, 5), 0);
     api.Canny(blur, edges, 50, 160);
     api.dilate(edges, dilated, kernel);
-    const corners = findQuadsFromEdges(api, dilated, width, height);
-    if (!corners) return empty;
-    const score = scoreQuad(corners, width, height);
+    const found = findBestDocument(api, dilated, width, height);
+    if (!found) return empty;
+    const metrics = analyzeQuad(found.quad, width, height, scannerConfig.geometry.edgeMargin);
     return {
-      corners,
-      locked: score.locked,
-      hint: score.hint,
+      corners: found.quad,
+      locked: found.confidence >= 0.72 && !metrics.clipped,
+      hint: "Find the document",
       frameWidth: width,
       frameHeight: height,
+      confidence: found.confidence,
+      clipped: metrics.clipped,
     };
   } finally {
     src.delete();
@@ -351,13 +291,14 @@ export function detectFromVideo(video: HTMLVideoElement): DetectResult {
     return {
       corners: null,
       locked: false,
-      hint: "Allow the camera, then hold one page in view.",
+      hint: "Find the document",
       frameWidth: 1,
       frameHeight: 1,
+      confidence: 0,
     };
   }
 
-  const scale = Math.min(1, DETECT_WIDTH / nativeW);
+  const scale = Math.min(1, scannerConfig.analysis.previewWidth / nativeW);
   const width = Math.max(1, Math.round(nativeW * scale));
   const height = Math.max(1, Math.round(nativeH * scale));
   const canvas = getWorkCanvas(width, height);
@@ -366,9 +307,10 @@ export function detectFromVideo(video: HTMLVideoElement): DetectResult {
     return {
       corners: null,
       locked: false,
-      hint: "Could not read the camera frame.",
+      hint: "Find the document",
       frameWidth: nativeW,
       frameHeight: nativeH,
+      confidence: 0,
     };
   }
   ctx.drawImage(video, 0, 0, width, height);
@@ -532,8 +474,9 @@ export function drawScanOverlay(canvas: HTMLCanvasElement, video: HTMLVideoEleme
     bottomRight: videoPointToDisplay(result.corners.bottomRight, layout),
     bottomLeft: videoPointToDisplay(result.corners.bottomLeft, layout),
   };
+  const clipped = Boolean(result.clipped);
   ctx.save();
-  ctx.fillStyle = result.locked ? "rgba(20, 40, 30, 0.28)" : "rgba(12, 10, 8, 0.38)";
+  ctx.fillStyle = result.locked ? "rgba(20, 40, 30, 0.28)" : "rgba(12, 10, 8, 0.32)";
   ctx.beginPath();
   ctx.rect(0, 0, displayW, displayH);
   ctx.moveTo(quad.topLeft.x, quad.topLeft.y);
@@ -544,9 +487,10 @@ export function drawScanOverlay(canvas: HTMLCanvasElement, video: HTMLVideoEleme
   ctx.fill("evenodd");
   ctx.restore();
 
-  ctx.strokeStyle = result.locked ? "#3d9a68" : "#c4a35a";
-  ctx.lineWidth = 3.5;
+  ctx.strokeStyle = result.locked ? "#3d9a68" : clipped ? "#d4b36a" : "#c4a35a";
+  ctx.lineWidth = result.locked ? 4 : 3.5;
   ctx.lineJoin = "round";
+  ctx.setLineDash(clipped ? [10, 8] : []);
   ctx.beginPath();
   ctx.moveTo(quad.topLeft.x, quad.topLeft.y);
   ctx.lineTo(quad.topRight.x, quad.topRight.y);
@@ -554,6 +498,7 @@ export function drawScanOverlay(canvas: HTMLCanvasElement, video: HTMLVideoEleme
   ctx.lineTo(quad.bottomLeft.x, quad.bottomLeft.y);
   ctx.closePath();
   ctx.stroke();
+  ctx.setLineDash([]);
 
   const tick = Math.max(16, Math.min(displayW, displayH) * 0.045);
   strokeCorner(ctx, quad.topLeft, 1, 1, tick);

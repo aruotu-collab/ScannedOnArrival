@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type MouseEvent } from "react";
-import { detectFromVideo, drawScanOverlay, flattenCapturedFrame, loadOpenCV, type Quad } from "../lib/detect";
+import { detectFromVideo, drawScanOverlay, flattenCapturedFrame, loadOpenCV } from "../lib/detect";
+import { DocumentTracker } from "./tracker";
+import type { Quad } from "./geometry";
 import {
   cameraErrorMessage,
   grabVideoFrame,
@@ -27,6 +29,7 @@ export function ScannerScreen({
   const overlayRef = useRef<HTMLCanvasElement | null>(null);
   const sessionRef = useRef<CameraSession | null>(null);
   const cornersRef = useRef<Quad | null>(null);
+  const trackerRef = useRef(new DocumentTracker());
   const capturingRef = useRef(false);
 
   const [gate, setGate] = useState<"explain" | "live" | "error">(hasCameraConsent() ? "live" : "explain");
@@ -69,6 +72,7 @@ export function ScannerScreen({
     let alive = true;
     let raf = 0;
     let lastDetect = 0;
+    trackerRef.current.reset();
     void loadOpenCV().catch(() => {
       if (alive) setHint("Find the document");
     });
@@ -88,10 +92,22 @@ export function ScannerScreen({
         lastDetect = now;
         try {
           const result = detectFromVideo(video);
-          cornersRef.current = result.corners;
-          setLocked(result.locked);
-          setHint(result.locked ? "Ready" : result.hint.replace(/\.$/, ""));
-          drawScanOverlay(overlay, video, result);
+          const tracked = trackerRef.current.update(
+            result.corners,
+            result.frameWidth,
+            result.frameHeight,
+            result.confidence,
+          );
+          cornersRef.current = tracked.corners;
+          setLocked(tracked.guidance.ready);
+          setHint(tracked.guidance.message);
+          drawScanOverlay(overlay, video, {
+            ...result,
+            corners: tracked.corners,
+            locked: tracked.guidance.ready,
+            hint: tracked.guidance.message,
+            clipped: tracked.metrics?.clipped,
+          });
         } catch {
           setHint("Find the document");
         }
