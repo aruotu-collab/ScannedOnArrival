@@ -79,10 +79,41 @@ function drawLetter(ctx: CanvasRenderingContext2D, width: number, height: number
   ctx.fillText("Sample letter for the ScannedOnArrival demo. Not a real bill.", 56, height - 48);
 }
 
+const DESK_W = 1100;
+const DESK_H = 1460;
+const LETTER_W = 760;
+const LETTER_H = 1076;
+const LETTER_ANGLE = -0.065;
+const LETTER_CX = DESK_W / 2 + 18;
+const LETTER_CY = DESK_H / 2 + 10;
+
+export type DemoPoint = { x: number; y: number };
+
+export function demoLetterQuad(): DemoPoint[] {
+  const cos = Math.cos(LETTER_ANGLE);
+  const sin = Math.sin(LETTER_ANGLE);
+  const map = (x: number, y: number): DemoPoint => ({
+    x: (LETTER_CX + x * cos - y * sin) / DESK_W,
+    y: (LETTER_CY + x * sin + y * cos) / DESK_H,
+  });
+  const halfW = LETTER_W / 2;
+  const halfH = LETTER_H / 2;
+  return [map(-halfW, -halfH), map(halfW, -halfH), map(halfW, halfH), map(-halfW, halfH)];
+}
+
+export function demoStartQuad(): DemoPoint[] {
+  return [
+    { x: 0.22, y: 0.24 },
+    { x: 0.76, y: 0.22 },
+    { x: 0.78, y: 0.78 },
+    { x: 0.24, y: 0.8 },
+  ];
+}
+
 function drawDeskPhoto(letter: HTMLCanvasElement): HTMLCanvasElement {
   const desk = document.createElement("canvas");
-  desk.width = 1100;
-  desk.height = 1460;
+  desk.width = DESK_W;
+  desk.height = DESK_H;
   const ctx = desk.getContext("2d");
   if (!ctx) return letter;
 
@@ -103,14 +134,12 @@ function drawDeskPhoto(letter: HTMLCanvasElement): HTMLCanvasElement {
   }
 
   ctx.save();
-  ctx.translate(desk.width / 2 + 18, desk.height / 2 + 10);
-  ctx.rotate(-0.065);
+  ctx.translate(LETTER_CX, LETTER_CY);
+  ctx.rotate(LETTER_ANGLE);
   ctx.shadowColor = "rgba(0, 0, 0, 0.42)";
   ctx.shadowBlur = 36;
   ctx.shadowOffsetY = 16;
-  const width = 760;
-  const height = 1076;
-  ctx.drawImage(letter, -width / 2, -height / 2, width, height);
+  ctx.drawImage(letter, -LETTER_W / 2, -LETTER_H / 2, LETTER_W, LETTER_H);
   ctx.restore();
 
   return desk;

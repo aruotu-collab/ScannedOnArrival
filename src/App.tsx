@@ -28,7 +28,7 @@ import { buildBackup, downloadBackup, parseBackupFile, restoreBackup } from "./l
 import { enableNotifications, listAttention, maybeNotify, type AttentionItem } from "./lib/reminders";
 import { classifySmart } from "./lib/openai";
 import { flattenImageFile } from "./lib/detect";
-import { makeDemoLetterScenes } from "./lib/demoLetter";
+import { demoLetterQuad, demoStartQuad, makeDemoLetterScenes, type DemoPoint } from "./lib/demoLetter";
 import { bleachScanBlob, cropImageFile, enhanceDocument, type CropInsets } from "./lib/scan";
 import { ScannerScreen } from "./scanner/ScannerScreen";
 import {
@@ -281,6 +281,7 @@ export default function App() {
   const [incomingFile, setIncomingFile] = useState<File | null>(null);
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [demoLanding, setDemoLanding] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -489,8 +490,9 @@ export default function App() {
     await persistDocs([record, ...nextDocs]);
     setSelectedId(DEMO_DOC_ID);
     setExpandedTypeId("council_tax");
+    setDemoLanding(true);
     setView("documents");
-    setToast("Demo scan saved under Council Tax");
+    setToast("Saved under Home → Council Tax");
   };
 
   const addDocument = async (draft: AddDraft, makeCurrent: boolean) => {
@@ -659,7 +661,7 @@ export default function App() {
             </div>
             <p>
               {view === "ready" && "What’s current, missing, or overdue — organised by document type, not files."}
-              {view === "demo" && "Try a scan with a sample letter, then see where it lands."}
+              {view === "demo" && "Fit the outline to the letter, tap Scan, then see the result."}
               {view === "documents" && "Tap a category, then a type. Swipe the tabs for other types; swipe the page for other copies."}
               {view === "tree" && "A filing-cabinet view. The folders are logical; the files can live anywhere."}
               {view === "inbox" && "Letterbox or inbox: both are ways documents arrive. Email stays optional."}
@@ -713,6 +715,8 @@ export default function App() {
               documents={currentDocs}
               allDocuments={documents}
               expandedTypeId={expandedTypeId}
+              fromDemo={demoLanding}
+              onDismissDemo={() => setDemoLanding(false)}
               onExpand={(typeId, documentId) => {
                 setExpandedTypeId(typeId);
                 if (documentId) setSelectedId(documentId);
@@ -847,6 +851,78 @@ export default function App() {
   );
 }
 
+function outlineFitted(corners: DemoPoint[], target: DemoPoint[], threshold = 0.075) {
+  return target.every((point, index) => {
+    const dx = corners[index].x - point.x;
+    const dy = corners[index].y - point.y;
+    return Math.hypot(dx, dy) < threshold;
+  });
+}
+
+function DemoOutline({
+  corners,
+  fitted,
+  locked,
+  onChange,
+}: {
+  corners: DemoPoint[];
+  fitted: boolean;
+  locked?: boolean;
+  onChange: (corners: DemoPoint[]) => void;
+}) {
+  const box = useRef<HTMLDivElement>(null);
+  const drag = useRef<number | null>(null);
+
+  const pointFromEvent = (event: PointerEvent<HTMLElement>): DemoPoint | null => {
+    const rect = box.current?.getBoundingClientRect();
+    if (!rect) return null;
+    return {
+      x: Math.min(0.98, Math.max(0.02, (event.clientX - rect.left) / rect.width)),
+      y: Math.min(0.98, Math.max(0.02, (event.clientY - rect.top) / rect.height)),
+    };
+  };
+
+  const moveCorner = (index: number, event: PointerEvent<HTMLElement>) => {
+    const next = pointFromEvent(event);
+    if (!next) return;
+    onChange(corners.map((corner, cornerIndex) => (cornerIndex === index ? next : corner)));
+  };
+
+  return (
+    <div className={`demo-outline ${fitted ? "fitted" : ""} ${locked ? "locked" : ""}`} ref={box}>
+      <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+        <polygon points={corners.map((corner) => `${corner.x * 100},${corner.y * 100}`).join(" ")} />
+      </svg>
+      {corners.map((corner, index) => (
+        <button
+          key={index}
+          type="button"
+          className="demo-handle"
+          aria-label={`Move outline corner ${index + 1}`}
+          disabled={locked}
+          style={{ left: `${corner.x * 100}%`, top: `${corner.y * 100}%` }}
+          onPointerDown={(event) => {
+            if (locked) return;
+            event.preventDefault();
+            event.currentTarget.setPointerCapture(event.pointerId);
+            drag.current = index;
+          }}
+          onPointerMove={(event) => {
+            if (drag.current !== index) return;
+            moveCorner(index, event);
+          }}
+          onPointerUp={() => {
+            drag.current = null;
+          }}
+          onPointerCancel={() => {
+            drag.current = null;
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
 function DemoView({
   onSave,
   onTryReal,
@@ -854,13 +930,17 @@ function DemoView({
   onSave: (file: File) => Promise<void>;
   onTryReal: () => void;
 }) {
-  const [phase, setPhase] = useState<"intro" | "scanning" | "result">("intro");
-  const [status, setStatus] = useState("Opening the camera…");
+  const [phase, setPhase] = useState<"intro" | "align" | "capturing" | "result">("intro");
+  const [status, setStatus] = useState("Preparing the camera…");
   const [deskUrl, setDeskUrl] = useState<string | null>(null);
   const [cleanUrl, setCleanUrl] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
+  const [corners, setCorners] = useState<DemoPoint[]>(demoStartQuad);
   const [viewerOpen, setViewerOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const target = useMemo(() => demoLetterQuad(), []);
+  const fitted = outlineFitted(corners, target);
 
   useEffect(() => {
     return () => {
@@ -869,9 +949,9 @@ function DemoView({
     };
   }, [deskUrl, cleanUrl]);
 
-  const runDemo = async () => {
-    setPhase("scanning");
-    setStatus("Opening the camera…");
+  const prepareScenes = async () => {
+    if (deskUrl && cleanUrl && file) return;
+    setLoading(true);
     try {
       const scenes = await makeDemoLetterScenes();
       if (deskUrl) URL.revokeObjectURL(deskUrl);
@@ -879,18 +959,34 @@ function DemoView({
       setDeskUrl(URL.createObjectURL(scenes.desk));
       setCleanUrl(URL.createObjectURL(scenes.clean));
       setFile(scenes.clean);
-      await sleep(450);
-      setStatus("Finding the page…");
-      await sleep(1100);
-      setStatus("Straightening the letter…");
-      await sleep(900);
-      setStatus("Saving a clean copy…");
-      await sleep(700);
-      setPhase("result");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const startAlign = async () => {
+    setCorners(demoStartQuad());
+    setPhase("align");
+    setStatus("Preparing the camera…");
+    try {
+      await prepareScenes();
     } catch {
       setStatus("The demo letter could not be drawn. Try again.");
       setPhase("intro");
     }
+  };
+
+  const captureScan = async () => {
+    setPhase("capturing");
+    setStatus("Hold still…");
+    await sleep(900);
+    setStatus("Finding the page…");
+    await sleep(1600);
+    setStatus("Straightening the letter…");
+    await sleep(1500);
+    setStatus("Saving a clean copy…");
+    await sleep(1300);
+    setPhase("result");
   };
 
   const saveResult = async () => {
@@ -907,37 +1003,68 @@ function DemoView({
     <div className="demo-view">
       {phase === "intro" && (
         <>
-          <ol className="demo-menu">
+          <p className="meta">
+            No paper needed. Fit the outline to a sample letter, tap Scan, and see where it lands.
+          </p>
+          <div className="demo-cta">
+            <button type="button" className="primary demo-try" disabled={loading} onClick={() => void startAlign()}>
+              {loading ? "Opening the camera…" : "Try the demo"}
+            </button>
+            <button type="button" className="primary ready demo-real" onClick={onTryReal}>
+              Try the real thing now
+            </button>
+          </div>
+          <ol className="demo-menu compact">
             <li>
-              <strong>Point this tab at the paper</strong>
-              <span>Scan means the phone camera in this browser — not an App Store app.</span>
+              <strong>1. Fit the outline</strong>
+              <span>Drag the corners so they sit on the page edges.</span>
             </li>
             <li>
-              <strong>The page is found and cropped</strong>
-              <span>Edges straighten, dark rims go, and you get a clean letter.</span>
+              <strong>2. Tap Scan</strong>
+              <span>Same shutter as the real camera in this tab.</span>
             </li>
             <li>
-              <strong>It lands under a document type</strong>
-              <span>This demo files a Council Tax bill under Home, then you can open the result.</span>
+              <strong>3. See the result</strong>
+              <span>The letter is cropped and filed under Council Tax.</span>
             </li>
           </ol>
-          <button type="button" className="primary demo-try" onClick={() => void runDemo()}>
-            Try the demo
-          </button>
-          <button type="button" className="primary ready demo-real" onClick={onTryReal}>
-            Try the real thing now
-          </button>
-          <p className="meta">No paper needed. We use a sample letter so you can see the result.</p>
         </>
       )}
 
-      {phase === "scanning" && (
+      {(phase === "align" || phase === "capturing") && (
         <div className="demo-stage">
+          <p className={`demo-align-hint ${fitted ? "ok" : ""}`}>
+            {phase === "capturing"
+              ? status
+              : fitted
+                ? "Looks good — tap Scan"
+                : "Drag the corners so the outline fits the letter"}
+          </p>
           <div className="demo-viewfinder">
             {deskUrl ? <img src={deskUrl} alt="Sample letter on a table" /> : <div className="demo-viewfinder-wait" />}
-            <div className="scan-beam" />
-            <p className="scan-hint ok">{status}</p>
+            {deskUrl && (
+              <DemoOutline
+                corners={corners}
+                fitted={fitted}
+                locked={phase === "capturing"}
+                onChange={setCorners}
+              />
+            )}
+            {phase === "capturing" && <div className="scan-beam" />}
+            <div className="demo-shutter-bar">
+              <button
+                type="button"
+                className={`scanner-shutter ${fitted ? "ready" : ""}`}
+                disabled={phase === "capturing" || !deskUrl}
+                aria-label="Scan this page"
+                onClick={() => void captureScan()}
+              />
+              <span>{phase === "capturing" ? "Saving" : fitted ? "Ready" : "Fit the page"}</span>
+            </div>
           </div>
+          <button type="button" className="primary ready demo-real" onClick={onTryReal}>
+            Try the real thing now
+          </button>
         </div>
       )}
 
@@ -945,6 +1072,15 @@ function DemoView({
         <div className="demo-result">
           <p className="kicker">The result</p>
           <h2>That’s the page that gets saved</h2>
+          <p className="meta">Next: open Documents to see where it lives — Home → Council Tax, on this device.</p>
+          <div className="demo-cta">
+            <button type="button" className="primary demo-try" disabled={saving} onClick={() => void saveResult()}>
+              {saving ? "Opening Documents…" : "See it in Documents"}
+            </button>
+            <button type="button" className="primary ready demo-real" onClick={onTryReal}>
+              Try the real thing now
+            </button>
+          </div>
           <button type="button" className="demo-result-page" onClick={() => setViewerOpen(true)}>
             <img src={cleanUrl} alt="Clean Council Tax demo letter" />
           </button>
@@ -952,20 +1088,14 @@ function DemoView({
             <span className="badge current">Current</span>
             <div>
               <strong>Council Tax 2026–27</strong>
-              <p className="meta">Home · stored on this device · scanned with your phone</p>
+              <p className="meta">Home → Council Tax · stored on this device</p>
             </div>
           </div>
           <div className="demo-actions">
-            <button type="button" className="primary ready demo-real" onClick={onTryReal}>
-              Try the real thing now
-            </button>
-            <button type="button" className="primary" disabled={saving} onClick={() => void saveResult()}>
-              {saving ? "Saving…" : "See it in Documents"}
-            </button>
             <button type="button" className="secondary" onClick={() => setViewerOpen(true)}>
               View the full page
             </button>
-            <button type="button" className="ghost" onClick={() => void runDemo()}>
+            <button type="button" className="ghost" onClick={() => void startAlign()}>
               Try the demo again
             </button>
           </div>
@@ -1290,6 +1420,8 @@ function DocumentsView({
   documents,
   allDocuments,
   expandedTypeId,
+  fromDemo,
+  onDismissDemo,
   onExpand,
   onAdd,
   onScan,
@@ -1298,6 +1430,8 @@ function DocumentsView({
   documents: DocumentRecord[];
   allDocuments: DocumentRecord[];
   expandedTypeId: string | null;
+  fromDemo?: boolean;
+  onDismissDemo?: () => void;
   onExpand: (typeId: string | null, documentId?: string) => void;
   onAdd: () => void;
   onScan: (typeId: string) => void;
@@ -1421,6 +1555,19 @@ function DocumentsView({
               </div>
               {selected && <span className="badge current">Selected</span>}
             </button>
+            {selected && fromDemo && (
+              <div className="demo-landing">
+                <div>
+                  <strong>This is where it lives</strong>
+                  <span>Home → Council Tax · stored on this device. The scan is the current copy under this tab.</span>
+                </div>
+                {onDismissDemo && (
+                  <button type="button" className="secondary" onClick={onDismissDemo}>
+                    Got it
+                  </button>
+                )}
+              </div>
+            )}
             {selected && activeType && (
               <div className="doc-category-body">
                 <div className="doc-category-body-inner">
