@@ -108,6 +108,7 @@ export interface AppSettings {
   outlookConnected: boolean;
   showDemoHousehold: boolean;
   onboardingComplete: boolean;
+  notificationsEnabled: boolean;
 }
 
 export interface AppState {

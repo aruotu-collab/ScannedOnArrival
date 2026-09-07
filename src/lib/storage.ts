@@ -76,6 +76,31 @@ export async function loadFileBlob(id: string): Promise<Blob | null> {
   return row?.blob ?? null;
 }
 
+export async function loadAllFileRecords(): Promise<FileBlobRecord[]> {
+  const db = await openDb();
+  const tx = db.transaction("files", "readonly");
+  const rows = await reqToPromise(tx.objectStore("files").getAll());
+  db.close();
+  return rows as FileBlobRecord[];
+}
+
+export async function replaceAllData(input: {
+  documents: DocumentRecord[];
+  files: FileBlobRecord[];
+  settings: AppSettings;
+  inbox: InboxItem[];
+}): Promise<void> {
+  const db = await openDb();
+  const tx = db.transaction(["documents", "files", "meta"], "readwrite");
+  await reqToPromise(tx.objectStore("documents").clear());
+  await reqToPromise(tx.objectStore("files").clear());
+  await Promise.all(input.documents.map((doc) => reqToPromise(tx.objectStore("documents").put(doc))));
+  await Promise.all(input.files.map((file) => reqToPromise(tx.objectStore("files").put(file))));
+  await reqToPromise(tx.objectStore("meta").put({ key: "settings", value: input.settings }));
+  await reqToPromise(tx.objectStore("meta").put({ key: "inbox", value: input.inbox }));
+  db.close();
+}
+
 export async function loadSettings(): Promise<AppSettings | null> {
   const db = await openDb();
   const tx = db.transaction("meta", "readonly");

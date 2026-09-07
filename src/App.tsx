@@ -16,6 +16,9 @@ import { computeStatus, freshnessLabel, locationShort, providerLabel, storageVer
 import { extractPdfText, isImage, isPdf } from "./lib/pdf";
 import { extractImageText } from "./lib/ocr";
 import { consumeSharedFile, isDesktopLayout, isIos, isStandalone } from "./lib/pwa";
+import { buildBackup, downloadBackup, parseBackupFile, restoreBackup } from "./lib/backup";
+import { enableNotifications, listAttention, maybeNotify, type AttentionItem } from "./lib/reminders";
+import { cropImageFile, stitchImages, type CropInsets } from "./lib/scan";
 import {
   clearAllData,
   deleteDocument,
@@ -38,7 +41,10 @@ const DEFAULT_SETTINGS: AppSettings = {
   outlookConnected: false,
   showDemoHousehold: false,
   onboardingComplete: false,
+  notificationsEnabled: false,
 };
+
+const DEFAULT_CROP: CropInsets = { top: 4, right: 4, bottom: 4, left: 4 };
 
 function providerFromLabel(label: string): LocationProvider {
   const value = label.toLowerCase();
@@ -197,7 +203,7 @@ export default function App() {
         ]);
         if (!alive) return;
         setDocuments(docs);
-        if (storedSettings) setSettings(storedSettings);
+        if (storedSettings) setSettings({ ...DEFAULT_SETTINGS, ...storedSettings });
         setInbox(storedInbox.length ? storedInbox : SAMPLE_INBOX);
       } catch {
         if (!alive) return;
@@ -283,6 +289,12 @@ export default function App() {
 
   const selected = documents.find((d) => d.id === selectedId) ?? null;
   const currentDocs = documents.filter((d) => d.isCurrent);
+  const attention = useMemo(() => listAttention(documents), [documents]);
+
+  useEffect(() => {
+    if (!hydrated || !settings.notificationsEnabled) return;
+    maybeNotify(attention);
+  }, [hydrated, settings.notificationsEnabled, attention]);
 
   const startEmpty = async () => {
     await persistSettings({ ...settings, onboardingComplete: true, showDemoHousehold: false });
@@ -477,6 +489,7 @@ export default function App() {
           {view === "ready" && (
             <ReadyView
               documents={documents}
+              attention={attention}
               onOpen={(id) => {
                 setSelectedId(id);
                 setView("documents");
@@ -547,6 +560,29 @@ export default function App() {
               installPrompt={installPrompt}
               onInstalled={() => setInstallPrompt(null)}
               onSettings={persistSettings}
+              onExport={async () => {
+                try {
+                  const backup = await buildBackup(settings);
+                  downloadBackup(backup);
+                  setToast("Backup downloaded to this device");
+                } catch (err) {
+                  setToast(err instanceof Error ? err.message : "Could not export the backup.");
+                }
+              }}
+              onRestore={async (file) => {
+                if (!window.confirm("Restore this backup? It replaces the index on this browser.")) return;
+                try {
+                  const backup = await parseBackupFile(file);
+                  const restored = await restoreBackup(backup, DEFAULT_SETTINGS);
+                  setDocuments(restored.documents);
+                  setSettings(restored.settings);
+                  setInbox(restored.inbox.length ? restored.inbox : SAMPLE_INBOX);
+                  setFoundEmail([]);
+                  setToast(`Restored ${restored.documents.length} documents`);
+                } catch (err) {
+                  setToast(err instanceof Error ? err.message : "Could not restore that backup.");
+                }
+              }}
               onReset={async () => {
                 await clearAllData();
                 setDocuments([]);
@@ -587,10 +623,12 @@ export default function App() {
 
 function ReadyView({
   documents,
+  attention,
   onOpen,
   onAdd,
 }: {
   documents: DocumentRecord[];
+  attention: AttentionItem[];
   onOpen: (id: string) => void;
   onAdd: () => void;
 }) {
@@ -628,6 +666,23 @@ function ReadyView({
           Missing
         </div>
       </div>
+      {attention.length > 0 && (
+        <div className="attention-list">
+          <strong>Needs attention</strong>
+          <span>These copies are in your index but are outdated or about to expire.</span>
+          {attention.map((item) => (
+            <button key={item.key} className="attention-row" onClick={() => onOpen(item.documentId)}>
+              <div>
+                <b>{item.typeLabel}</b>
+                <small>
+                  {item.title} · {item.detail}
+                </small>
+              </div>
+              <span className={`badge ${item.kind}`}>{item.kind === "expiring" ? "Expiring" : "Outdated"}</span>
+            </button>
+          ))}
+        </div>
+      )}
       <div className="grid ready-grid">
         {rows.map(({ type, doc, status }) => (
           <button key={type.id} className="card" onClick={() => (doc ? onOpen(doc.id) : onAdd())}>
@@ -1012,12 +1067,16 @@ function SettingsView({
   installPrompt,
   onInstalled,
   onSettings,
+  onExport,
+  onRestore,
   onReset,
 }: {
   settings: AppSettings;
   installPrompt: BeforeInstallPromptEvent | null;
   onInstalled: () => void;
   onSettings: (s: AppSettings) => Promise<void>;
+  onExport: () => Promise<void>;
+  onRestore: (file: File) => Promise<void>;
   onReset: () => Promise<void>;
 }) {
   const standalone = isStandalone();
@@ -1084,6 +1143,54 @@ function SettingsView({
         </label>
       </div>
       <div className="card">
+        <h2>Reminders</h2>
+        <p className="meta">
+          When something is outdated or about to expire, Ready lists it. If you allow notifications, this browser
+          can also remind you once a day — best after Add to Home Screen, especially on iPhone.
+        </p>
+        <button
+          className={settings.notificationsEnabled ? "secondary" : "primary"}
+          style={{ marginTop: 12 }}
+          onClick={() => {
+            void (async () => {
+              if (settings.notificationsEnabled) {
+                await onSettings({ ...settings, notificationsEnabled: false });
+                return;
+              }
+              const allowed = await enableNotifications();
+              await onSettings({ ...settings, notificationsEnabled: allowed });
+            })();
+          }}
+        >
+          {settings.notificationsEnabled ? "Turn reminders off" : "Allow reminders on this device"}
+        </button>
+      </div>
+      <div className="card">
+        <h2>Backup and restore</h2>
+        <p className="meta">
+          The index lives in this browser. Download a backup before you change phones or clear site data, then
+          restore it here. The file stays on your device.
+        </p>
+        <div className="row" style={{ marginTop: 12 }}>
+          <button className="primary" onClick={() => void onExport()}>
+            Download backup
+          </button>
+          <label className="secondary" style={{ display: "inline-flex" }}>
+            Restore backup
+            <input
+              type="file"
+              accept="application/json,.json"
+              hidden
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                e.target.value = "";
+                if (file) void onRestore(file);
+              }}
+            />
+          </label>
+        </div>
+      </div>
+      <div className="card">
         <h3>This device</h3>
         <p className="meta">Clear local documents, files and settings from IndexedDB on this browser.</p>
         <button className="danger" onClick={onReset}>
@@ -1107,13 +1214,18 @@ function AddDocumentModal({
   onClose: () => void;
   onSave: (draft: AddDraft, makeCurrent: boolean) => Promise<void>;
 }) {
-  const [step, setStep] = useState<"choose" | "camera" | "form" | "replace">(incomingFile ? "choose" : startAt);
+  const [step, setStep] = useState<"choose" | "camera" | "review" | "crop" | "form" | "replace">(
+    incomingFile ? "choose" : startAt,
+  );
   const [busy, setBusy] = useState(false);
   const [busyLabel, setBusyLabel] = useState("Reading the document locally…");
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState<AddDraft | null>(null);
   const [existing, setExisting] = useState<DocumentRecord | null>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
+  const [pages, setPages] = useState<Array<{ id: string; file: File; url: string }>>([]);
+  const [pending, setPending] = useState<{ file: File; url: string } | null>(null);
+  const [crop, setCrop] = useState<CropInsets>(DEFAULT_CROP);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const ingested = useRef(false);
 
@@ -1184,15 +1296,20 @@ function AddDocumentModal({
     };
   };
 
-  const handleFile = async (file: File, method: SourceKind, storageKind: AddDraft["storageKind"]) => {
+  const handleFile = async (
+    file: File,
+    method: SourceKind,
+    storageKind: AddDraft["storageKind"],
+    preparedText?: string,
+  ) => {
     setBusy(true);
     setBusyLabel(isImage(file) ? "Reading the page with on-device OCR…" : "Reading the document locally…");
     setError(null);
     try {
-      let text = "";
-      if (isPdf(file)) {
+      let text = preparedText ?? "";
+      if (!preparedText && isPdf(file)) {
         text = await extractPdfText(file);
-      } else if (isImage(file)) {
+      } else if (!preparedText && isImage(file)) {
         try {
           text = await extractImageText(file);
         } catch {
@@ -1236,6 +1353,18 @@ function AddDocumentModal({
     void handleFile(incomingFile, method, "stored");
   }, [incomingFile]);
 
+  const stopCamera = () => {
+    stream?.getTracks().forEach((track) => track.stop());
+    setStream(null);
+  };
+
+  const openPage = (file: File) => {
+    stopCamera();
+    setPending({ file, url: URL.createObjectURL(file) });
+    setCrop(DEFAULT_CROP);
+    setStep("review");
+  };
+
   const capturePhoto = async () => {
     const video = videoRef.current;
     if (!video) return;
@@ -1247,10 +1376,53 @@ function AddDocumentModal({
     ctx.drawImage(video, 0, 0);
     const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.92));
     if (!blob) return;
-    const file = new File([blob], `scan-${todayIso()}.jpg`, { type: "image/jpeg" });
-    stream?.getTracks().forEach((track) => track.stop());
-    setStream(null);
-    await handleFile(file, "camera", "stored");
+    openPage(new File([blob], `scan-${todayIso()}-p${pages.length + 1}.jpg`, { type: "image/jpeg" }));
+  };
+
+  const keepPage = () => {
+    if (!pending) return;
+    setPages((current) => [...current, { id: uid(), file: pending.file, url: pending.url }]);
+    setPending(null);
+    setStep("camera");
+  };
+
+  const finishScan = async (extra?: File) => {
+    const files = [...pages.map((page) => page.file), ...(extra ? [extra] : [])];
+    if (files.length === 0) return;
+    stopCamera();
+    setBusy(true);
+    setBusyLabel(files.length > 1 ? "Joining pages and reading them…" : "Reading the page with on-device OCR…");
+    try {
+      const texts: string[] = [];
+      for (const file of files) {
+        try {
+          texts.push(await extractImageText(file));
+        } catch {
+          texts.push("");
+        }
+      }
+      const combined = await stitchImages(files);
+      await handleFile(combined, "camera", "stored", texts.join("\n"));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not finish that scan.");
+      setBusy(false);
+    }
+  };
+
+  const applyCrop = async () => {
+    if (!pending) return;
+    setBusy(true);
+    setBusyLabel("Cropping the page…");
+    try {
+      const file = await cropImageFile(pending.file, crop);
+      URL.revokeObjectURL(pending.url);
+      setPending({ file, url: URL.createObjectURL(file) });
+      setStep("review");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not crop that page.");
+    } finally {
+      setBusy(false);
+    }
   };
 
   const startCamera = async () => {
@@ -1336,9 +1508,17 @@ function AddDocumentModal({
           <>
             <h2>Scan with your phone</h2>
             <p className="meta">
-              Allow camera access in this browser tab, then hold the paper in view. On a computer this may use a
-              webcam — for a letter, open this same page on your phone instead.
+              Hold one page in view, capture it, then crop or add the next page. A two-page letter can be one
+              document.
             </p>
+            {pages.length > 0 && (
+              <div className="page-thumbs">
+                {pages.map((page, index) => (
+                  <img key={page.id} src={page.url} alt={`Page ${index + 1}`} />
+                ))}
+                <span>{pages.length} page{pages.length === 1 ? "" : "s"} captured</span>
+              </div>
+            )}
             <div className="camera-wrap">
               <video ref={videoRef} id="soa-camera" autoPlay playsInline muted />
             </div>
@@ -1349,19 +1529,102 @@ function AddDocumentModal({
               <button className="primary" onClick={capturePhoto}>
                 Capture
               </button>
+              {pages.length > 0 && (
+                <button className="primary" onClick={() => void finishScan()} disabled={busy}>
+                  Finish scan
+                </button>
+              )}
               <label className="secondary" style={{ display: "inline-flex" }}>
                 Use the phone camera roll
                 <input
                   type="file"
                   accept="image/*"
-                  capture="environment"
                   hidden
                   onChange={(e) => {
                     const file = e.target.files?.[0];
-                    if (file) void handleFile(file, "camera", "stored");
+                    if (file) openPage(file);
                   }}
                 />
               </label>
+            </div>
+          </>
+        )}
+
+        {step === "review" && pending && (
+          <>
+            <h2>Check this page</h2>
+            <p className="meta">Crop the edges, retake it, add another page, or finish the scan.</p>
+            <div className="camera-wrap">
+              <img src={pending.url} alt="Captured page" />
+            </div>
+            <div className="row" style={{ marginTop: 12 }}>
+              <button
+                className="secondary"
+                onClick={() => {
+                  URL.revokeObjectURL(pending.url);
+                  setPending(null);
+                  setStep("camera");
+                }}
+              >
+                Retake
+              </button>
+              <button className="secondary" onClick={() => setStep("crop")}>
+                Crop
+              </button>
+              <button className="secondary" onClick={keepPage}>
+                Add another page
+              </button>
+              <button className="primary" onClick={() => void finishScan(pending.file)} disabled={busy}>
+                Use this page
+              </button>
+            </div>
+          </>
+        )}
+
+        {step === "crop" && pending && (
+          <>
+            <h2>Crop the page</h2>
+            <p className="meta">Trim the edges so the letter fills the frame. This stays on your phone.</p>
+            <div className="crop-stage">
+              <img src={pending.url} alt="Page to crop" />
+              <div
+                className="crop-frame"
+                style={{
+                  top: `${crop.top}%`,
+                  right: `${crop.right}%`,
+                  bottom: `${crop.bottom}%`,
+                  left: `${crop.left}%`,
+                }}
+              />
+            </div>
+            <div className="crop-sliders">
+              {(
+                [
+                  ["top", "Top"],
+                  ["bottom", "Bottom"],
+                  ["left", "Left"],
+                  ["right", "Right"],
+                ] as const
+              ).map(([key, label]) => (
+                <label key={key} className="field">
+                  <span>{label}</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={40}
+                    value={crop[key]}
+                    onChange={(e) => setCrop({ ...crop, [key]: Number(e.target.value) })}
+                  />
+                </label>
+              ))}
+            </div>
+            <div className="row">
+              <button className="secondary" onClick={() => setStep("review")}>
+                Cancel
+              </button>
+              <button className="primary" onClick={() => void applyCrop()} disabled={busy}>
+                Apply crop
+              </button>
             </div>
           </>
         )}
