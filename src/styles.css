@@ -1872,14 +1872,14 @@ button {
 
 .demo-landing {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 10px;
   background: #e6f2ea;
   border: 1px solid #b7d4c2;
   border-radius: 16px;
-  padding: 14px 16px;
-  margin: 0 12px 12px;
+  padding: 10px 12px;
+  margin: 0 12px 10px;
 }
 
 .demo-landing strong {
@@ -2061,6 +2061,75 @@ button {
 
 .demo-viewfinder-wait {
   background: linear-gradient(160deg, #6f4c2d, #352214);
+}
+
+.demo-review {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--cream);
+  color: var(--ink);
+  padding: calc(10px + env(safe-area-inset-top, 0px)) 16px 0;
+  overflow: hidden;
+}
+
+.demo-review-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.demo-review-top h2 {
+  font-family: var(--font-display);
+  margin: 0;
+  font-size: 1.35rem;
+}
+
+.demo-review .scanner-icon-btn {
+  background: var(--forest);
+  color: #f7f1e4;
+}
+
+.demo-review-page {
+  display: block;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.demo-review-page img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  object-fit: contain;
+  object-position: top;
+  background: #fff;
+}
+
+.demo-review-page.compact img {
+  max-height: 22vh;
+}
+
+.demo-review .scan-pages-actions {
+  flex-shrink: 0;
+  margin: 0 -16px 0;
+  padding: 10px 16px calc(14px + env(safe-area-inset-bottom, 0px));
+}
+
+.demo-review .scan-pages-actions .primary,
+.demo-review .scan-pages-actions .secondary {
+  width: 100%;
+  justify-content: center;
 }
 
 .demo-result h2 {

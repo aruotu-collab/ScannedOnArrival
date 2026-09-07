@@ -457,7 +457,10 @@ export default function App() {
     setView("demo");
   };
 
-  const saveDemoScan = async (file: File) => {
+  const saveDemoScan = async (files: File[], savedTitle?: string) => {
+    const pageFiles = files.filter(Boolean);
+    const file = pageFiles[0];
+    if (!file) return;
     const existing = documents.find((doc) => doc.id === DEMO_DOC_ID);
     const without = documents.filter((doc) => doc.id !== DEMO_DOC_ID);
     const nextDocs = without.map((doc) =>
@@ -467,7 +470,7 @@ export default function App() {
     );
     const record: DocumentRecord = {
       id: DEMO_DOC_ID,
-      title: "Council Tax 2026–27 (demo)",
+      title: savedTitle?.trim() ? `${savedTitle.trim()} (demo)` : "Council Tax 2026–27 (demo)",
       typeId: "council_tax",
       categoryId: "home",
       period: "2026–27",
@@ -480,11 +483,13 @@ export default function App() {
       locationProvider: "local",
       fileName: file.name,
       mimeType: file.type || "image/jpeg",
-      pageCount: 1,
+      pageCount: pageFiles.length,
       isCurrent: true,
       notes: "Added from the in-app demo.",
     };
-    await saveFileBlob({ id: pageBlobId(DEMO_DOC_ID, 0), documentId: DEMO_DOC_ID, blob: file });
+    for (let index = 0; index < pageFiles.length; index += 1) {
+      await saveFileBlob({ id: pageBlobId(DEMO_DOC_ID, index), documentId: DEMO_DOC_ID, blob: pageFiles[index] });
+    }
     await persistDocs([record, ...nextDocs]);
     setSelectedId(DEMO_DOC_ID);
     setExpandedTypeId("council_tax");
@@ -659,7 +664,7 @@ export default function App() {
             </div>
             <p>
               {view === "ready" && "What’s current, missing, or overdue — organised by document type, not files."}
-              {view === "demo" && "Find the page, straighten it, tap Scan when the outline turns green."}
+              {view === "demo" && "Scan the letter, check the page, then save it under Council Tax."}
               {view === "documents" && "Tap a category, then a type. Swipe the tabs for other types; swipe the page for other copies."}
               {view === "tree" && "A filing-cabinet view. The folders are logical; the files can live anywhere."}
               {view === "inbox" && "Letterbox or inbox: both are ways documents arrive. Email stays optional."}
@@ -667,7 +672,7 @@ export default function App() {
             </p>
           </div>
         </header>
-        {view !== "demo" && (
+        {view !== "demo" && !demoLanding && (
           <div className="scan-hero">
             <ScanCta
               onScan={() => openAdd("camera")}
@@ -853,17 +858,23 @@ function DemoView({
   onSave,
   onTryReal,
 }: {
-  onSave: (file: File) => Promise<void>;
+  onSave: (files: File[], title?: string) => Promise<void>;
   onTryReal: () => void;
 }) {
-  const [phase, setPhase] = useState<"intro" | "scanning" | "result">("intro");
+  const [phase, setPhase] = useState<"intro" | "scanning" | "pages" | "form">("intro");
   const [deskUrl, setDeskUrl] = useState<string | null>(null);
   const [cleanUrl, setCleanUrl] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
+  const [pages, setPages] = useState<Array<{ id: string; file: File; url: string; selected: boolean }>>([]);
+  const [activePage, setActivePage] = useState(0);
   const [viewerOpen, setViewerOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [title, setTitle] = useState("Council Tax 2026–27");
+  const [period, setPeriod] = useState("2026–27");
+
+  const currentPage = pages[activePage];
 
   useEffect(() => {
     return () => {
@@ -896,14 +907,38 @@ function DemoView({
     }
   };
 
+  const keepCapture = () => {
+    if (!file || !cleanUrl) return;
+    setPages((current) => {
+      const next = [...current, { id: uid(), file, url: cleanUrl, selected: true }];
+      setActivePage(next.length - 1);
+      return next;
+    });
+    setPhase("pages");
+  };
+
+  const dropPage = () => {
+    const remaining = pages.filter((_, index) => index !== activePage);
+    setPages(remaining);
+    setActivePage((index) => Math.max(0, Math.min(index, remaining.length - 1)));
+    setPhase(remaining.length === 0 ? "scanning" : "pages");
+  };
+
   const saveResult = async () => {
-    if (!file) return;
+    const chosen = pages.filter((page) => page.selected).map((page) => page.file);
+    if (chosen.length === 0) return;
     setSaving(true);
     try {
-      await onSave(file);
+      await onSave(chosen, title);
     } finally {
       setSaving(false);
     }
+  };
+
+  const closeReview = () => {
+    setPhase("intro");
+    setPages([]);
+    setActivePage(0);
   };
 
   return (
@@ -911,8 +946,8 @@ function DemoView({
       {phase === "intro" && (
         <>
           <p className="meta">
-            No paper needed. A sample letter is already on the table. The outline goes white, then gold, then green —
-            same as a real scan. Move the phone to straighten the page, then tap the shutter.
+            No paper needed. A sample letter is already on the table. Scan it the same way as a real letter: find the
+            page, tap the shutter, check the scan, then save it.
           </p>
           <div className="demo-cta">
             <button type="button" className="primary demo-try" disabled={loading} onClick={() => void startScan()}>
@@ -933,56 +968,137 @@ function DemoView({
               <span>Same button as the real camera in this tab. It turns green when it says Ready.</span>
             </li>
             <li>
-              <strong>3. See the result</strong>
-              <span>The letter is cropped and filed under Council Tax.</span>
+              <strong>3. Check the scan</strong>
+              <span>Add another page if the letter has a back, or save this file.</span>
+            </li>
+            <li>
+              <strong>4. Confirm and file it</strong>
+              <span>It lands under Home → Council Tax, on this device.</span>
             </li>
           </ol>
         </>
       )}
 
       {phase === "scanning" && deskUrl && (
-        <DemoScanner deskUrl={deskUrl} onClose={() => setPhase("intro")} onCaptured={() => setPhase("result")} />
+        <DemoScanner
+          deskUrl={deskUrl}
+          onClose={() => setPhase(pages.length > 0 ? "pages" : "intro")}
+          onCaptured={keepCapture}
+        />
       )}
 
-      {phase === "result" && cleanUrl && (
-        <div className="demo-result">
-          <p className="kicker">The result</p>
-          <h2>That’s the page that gets saved</h2>
-          <p className="meta">Next: open Documents to see where it lives — Home → Council Tax, on this device.</p>
-          <div className="demo-cta">
-            <button type="button" className="primary demo-try" disabled={saving} onClick={() => void saveResult()}>
-              {saving ? "Opening Documents…" : "See it in Documents"}
+      {phase === "pages" && currentPage && (
+        <div className="demo-review">
+          <div className="demo-review-top">
+            <button className="scanner-icon-btn" type="button" onClick={closeReview} aria-label="Close">
+              ×
             </button>
-            <button type="button" className="primary ready demo-real" onClick={onTryReal}>
-              Try the real thing now
-            </button>
-          </div>
-          <button type="button" className="demo-result-page" onClick={() => setViewerOpen(true)}>
-            <img src={cleanUrl} alt="Clean Council Tax demo letter" />
-          </button>
-          <div className="demo-result-card">
-            <span className="badge current">Current</span>
             <div>
-              <strong>Council Tax 2026–27</strong>
-              <p className="meta">Home → Council Tax · stored on this device</p>
+              <p className="kicker">Your scans</p>
+              <h2>Page {activePage + 1}</h2>
             </div>
+            <span className="scanner-icon-btn ghost" aria-hidden="true" />
           </div>
-          <div className="demo-actions">
-            <button type="button" className="secondary" onClick={() => setViewerOpen(true)}>
-              View the full page
+          <p className="meta">Add another page if the letter has a back, or save this file.</p>
+          {pages.length > 1 && (
+            <div className="page-thumbs">
+              {pages.map((page, index) => (
+                <button
+                  key={page.id}
+                  className={`page-thumb ${index === activePage ? "active" : ""} ${page.selected ? "picked" : ""}`}
+                  onClick={() => setActivePage(index)}
+                >
+                  <img src={page.url} alt={`Page ${index + 1}`} />
+                </button>
+              ))}
+            </div>
+          )}
+          <button type="button" className="demo-review-page" onClick={() => setViewerOpen(true)}>
+            <img src={currentPage.url} alt={`Scan ${activePage + 1}`} />
+          </button>
+          <label className="scan-select">
+            <input
+              type="checkbox"
+              checked={currentPage.selected}
+              onChange={(event) =>
+                setPages((current) =>
+                  current.map((page, index) =>
+                    index === activePage ? { ...page, selected: event.target.checked } : page,
+                  ),
+                )
+              }
+            />
+            Use this scan · tap the page to view the full file
+          </label>
+          <div className="scan-pages-actions">
+            <button className="primary" type="button" onClick={() => setPhase("scanning")}>
+              Add another page
             </button>
-            <button type="button" className="ghost" onClick={() => void startScan()}>
-              Try the demo again
+            <button
+              className="primary"
+              type="button"
+              disabled={pages.every((page) => !page.selected)}
+              onClick={() => setPhase("form")}
+            >
+              Save selected scans
+            </button>
+            <button className="secondary" type="button" onClick={dropPage}>
+              Don’t use this one
             </button>
           </div>
         </div>
       )}
 
-      {viewerOpen && cleanUrl && (
+      {phase === "form" && (
+        <div className="demo-review">
+          <div className="demo-review-top">
+            <button className="scanner-icon-btn" type="button" onClick={() => setPhase("pages")} aria-label="Back">
+              ×
+            </button>
+            <div>
+              <p className="kicker">Save this file</p>
+              <h2>Confirm what this is</h2>
+            </div>
+            <span className="scanner-icon-btn ghost" aria-hidden="true" />
+          </div>
+          {currentPage && (
+            <button type="button" className="demo-review-page compact" onClick={() => setViewerOpen(true)}>
+              <img src={currentPage.url} alt="Page to save" />
+            </button>
+          )}
+          <div className="notice ok">We think this belongs in {suggestedPath("council_tax", period)}. Save here, or change the title.</div>
+          <label className="field">
+            <span>Title</span>
+            <input value={title} onChange={(event) => setTitle(event.target.value)} />
+          </label>
+          <label className="field">
+            <span>Category</span>
+            <input value="Home" readOnly />
+          </label>
+          <label className="field">
+            <span>Document type</span>
+            <input value="Council Tax" readOnly />
+          </label>
+          <label className="field">
+            <span>Period</span>
+            <input value={period} onChange={(event) => setPeriod(event.target.value)} />
+          </label>
+          <div className="scan-pages-actions">
+            <button className="primary" type="button" disabled={!title.trim() || saving} onClick={() => void saveResult()}>
+              {saving ? "Saving…" : "Save this file"}
+            </button>
+            <button className="secondary" type="button" onClick={() => setPhase("pages")}>
+              Back to pages
+            </button>
+          </div>
+        </div>
+      )}
+
+      {viewerOpen && pages.length > 0 && (
         <FileViewer
-          title="Council Tax 2026–27 (demo)"
-          pages={[{ url: cleanUrl, image: true }]}
-          startAt={0}
+          title={title || "Council Tax 2026–27 (demo)"}
+          pages={pages.map((page) => ({ url: page.url, image: true }))}
+          startAt={activePage}
           onClose={() => setViewerOpen(false)}
         />
       )}
@@ -1435,7 +1551,7 @@ function DocumentsView({
               <div className="demo-landing">
                 <div>
                   <strong>This is where it lives</strong>
-                  <span>Home → Council Tax · stored on this device. The scan is the current copy under this tab.</span>
+                  <span>Home → Council Tax · on this device. Your scan is the latest copy below.</span>
                 </div>
                 {onDismissDemo && (
                   <button type="button" className="secondary" onClick={onDismissDemo}>
@@ -1469,7 +1585,7 @@ function DocumentsView({
                       </div>
                       <span className={`badge ${status}`}>{statusBadgeText(status)}</span>
                     </div>
-                    <ScanCta compact onScan={() => onScan(activeType.id)} onAdd={onAdd} />
+                    {!fromDemo && <ScanCta compact onScan={() => onScan(activeType.id)} onAdd={onAdd} />}
                   </div>
                   {copies.length === 0 && <p className="meta doc-type-empty">Nothing saved here yet.</p>}
                   {current && (
