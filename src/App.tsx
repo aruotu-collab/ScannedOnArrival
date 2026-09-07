@@ -64,7 +64,6 @@ const DEFAULT_CROP: CropInsets = { top: 4, right: 4, bottom: 4, left: 4 };
 const DEMO_DOC_ID = "demo-try-scan";
 const NAV_ITEMS: Array<{ id: ViewId; label: string; short: string }> = [
   { id: "ready", label: "Ready", short: "Ready" },
-  { id: "demo", label: "Demo", short: "Demo" },
   { id: "documents", label: "Documents", short: "Docs" },
   { id: "tree", label: "Tree", short: "Tree" },
   { id: "inbox", label: "Inbox", short: "Inbox" },
@@ -643,14 +642,21 @@ export default function App() {
         <header className="topbar">
           <div>
             <ProductBadge />
-            <h1>
-              {view === "ready" && "Ready"}
-              {view === "demo" && "Demo"}
-              {view === "documents" && "Documents"}
-              {view === "tree" && "Document tree"}
-              {view === "inbox" && "Document inbox"}
-              {view === "settings" && "Settings"}
-            </h1>
+            <div className="topbar-heading">
+              <h1>
+                {view === "ready" && "Ready"}
+                {view === "demo" && "Demo"}
+                {view === "documents" && "Documents"}
+                {view === "tree" && "Document tree"}
+                {view === "inbox" && "Document inbox"}
+                {view === "settings" && "Settings"}
+              </h1>
+              {view === "ready" && (
+                <button type="button" className="try-demo-btn" onClick={() => setView("demo")}>
+                  Try Demo
+                </button>
+              )}
+            </div>
             <p>
               {view === "ready" && "What’s current, missing, or overdue — organised by document type, not files."}
               {view === "demo" && "Try a scan with a sample letter, then see where it lands."}
@@ -685,7 +691,6 @@ export default function App() {
                 if (documentId) setSelectedId(documentId);
               }}
               onAdd={() => openAdd(isDesktopLayout() ? "choose" : "camera")}
-              onOpenDemo={() => setView("demo")}
               onScan={(typeId) => openAdd("camera", typeId)}
               onDeleted={async (id) => {
                 await deleteDocument(id);
@@ -694,7 +699,15 @@ export default function App() {
               }}
             />
           )}
-          {view === "demo" && <DemoView onSave={saveDemoScan} />}
+          {view === "demo" && (
+            <DemoView
+              onSave={saveDemoScan}
+              onTryReal={() => {
+                setView("ready");
+                openAdd("camera");
+              }}
+            />
+          )}
           {view === "documents" && (
             <DocumentsView
               documents={currentDocs}
@@ -834,7 +847,13 @@ export default function App() {
   );
 }
 
-function DemoView({ onSave }: { onSave: (file: File) => Promise<void> }) {
+function DemoView({
+  onSave,
+  onTryReal,
+}: {
+  onSave: (file: File) => Promise<void>;
+  onTryReal: () => void;
+}) {
   const [phase, setPhase] = useState<"intro" | "scanning" | "result">("intro");
   const [status, setStatus] = useState("Opening the camera…");
   const [deskUrl, setDeskUrl] = useState<string | null>(null);
@@ -905,6 +924,9 @@ function DemoView({ onSave }: { onSave: (file: File) => Promise<void> }) {
           <button type="button" className="primary demo-try" onClick={() => void runDemo()}>
             Try the demo
           </button>
+          <button type="button" className="primary ready demo-real" onClick={onTryReal}>
+            Try the real thing now
+          </button>
           <p className="meta">No paper needed. We use a sample letter so you can see the result.</p>
         </>
       )}
@@ -934,6 +956,9 @@ function DemoView({ onSave }: { onSave: (file: File) => Promise<void> }) {
             </div>
           </div>
           <div className="demo-actions">
+            <button type="button" className="primary ready demo-real" onClick={onTryReal}>
+              Try the real thing now
+            </button>
             <button type="button" className="primary" disabled={saving} onClick={() => void saveResult()}>
               {saving ? "Saving…" : "See it in Documents"}
             </button>
@@ -965,7 +990,6 @@ function ReadyView({
   expandedTypeId,
   onExpand,
   onAdd,
-  onOpenDemo,
   onScan,
   onDeleted,
 }: {
@@ -974,7 +998,6 @@ function ReadyView({
   expandedTypeId: string | null;
   onExpand: (typeId: string | null, documentId?: string) => void;
   onAdd: () => void;
-  onOpenDemo: () => void;
   onScan: (typeId: string) => void;
   onDeleted: (id: string) => void;
 }) {
@@ -997,10 +1020,6 @@ function ReadyView({
           your phone to scan paper.
         </span>
       </div>
-      <button type="button" className="demo-teaser" onClick={onOpenDemo}>
-        <strong>Not sure yet? Try the demo</strong>
-        <span>Watch a letter get scanned and land under Council Tax — no paper needed.</span>
-      </button>
       <PhoneHandoff />
       <div className="summary-strip">
         <div className="stat current">

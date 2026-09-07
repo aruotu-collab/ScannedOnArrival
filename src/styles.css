@@ -289,12 +289,29 @@ button {
   min-width: 0;
 }
 
+.topbar-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .topbar h1 {
   margin: 0;
   font-family: var(--font-display);
   font-size: 2rem;
   font-weight: 560;
   letter-spacing: -0.03em;
+}
+
+.try-demo-btn {
+  flex-shrink: 0;
+  border: 1px solid #d4bc7a;
+  border-radius: 999px;
+  padding: 8px 14px;
+  background: #fbf6e8;
+  color: var(--forest);
+  font-weight: 800;
 }
 
 .topbar p {
@@ -1471,7 +1488,7 @@ button {
     color: #cfc4ae;
     background: none;
     border: 0;
-    font-size: 0.68rem;
+    font-size: 0.75rem;
     font-weight: 600;
     min-height: 36px;
     padding: 6px 5px;
@@ -1869,10 +1886,15 @@ button {
   line-height: 1.45;
 }
 
-.demo-try {
+.demo-try,
+.demo-real {
   align-self: flex-start;
   padding: 14px 22px;
   font-size: 1rem;
+}
+
+.demo-actions .demo-real {
+  align-self: stretch;
 }
 
 .demo-stage {
