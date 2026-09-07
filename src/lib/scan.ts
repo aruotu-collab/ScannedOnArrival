@@ -44,6 +44,39 @@ export async function cropImageFile(file: File, insets: CropInsets): Promise<Fil
   return canvasToFile(canvas, file.name.replace(/(\.\w+)?$/, "-crop.jpg"));
 }
 
+export async function enhanceDocument(file: File): Promise<File> {
+  const image = await loadImage(file);
+  const maxEdge = 2000;
+  const scale = Math.min(1.35, maxEdge / Math.max(image.naturalWidth, image.naturalHeight));
+  const width = Math.max(1, Math.round(image.naturalWidth * scale));
+  const height = Math.max(1, Math.round(image.naturalHeight * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return file;
+  ctx.filter = "contrast(1.28) brightness(1.06) saturate(0.82)";
+  ctx.drawImage(image, 0, 0, width, height);
+  ctx.filter = "none";
+  const pixels = ctx.getImageData(0, 0, width, height);
+  const data = pixels.data;
+  let min = 255;
+  let max = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    const luma = 0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2];
+    if (luma < min) min = luma;
+    if (luma > max) max = luma;
+  }
+  const range = Math.max(18, max - min);
+  for (let i = 0; i < data.length; i += 4) {
+    data[i] = Math.max(0, Math.min(255, ((data[i] - min) / range) * 255));
+    data[i + 1] = Math.max(0, Math.min(255, ((data[i + 1] - min) / range) * 255));
+    data[i + 2] = Math.max(0, Math.min(255, ((data[i + 2] - min) / range) * 255));
+  }
+  ctx.putImageData(pixels, 0, 0);
+  return canvasToFile(canvas, file.name.replace(/(\.\w+)?$/, "-scan.jpg"));
+}
+
 export async function stitchImages(files: File[]): Promise<File> {
   if (files.length === 1) return files[0];
   const images = await Promise.all(files.map(loadImage));

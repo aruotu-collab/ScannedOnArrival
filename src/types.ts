@@ -109,6 +109,7 @@ export interface AppSettings {
   showDemoHousehold: boolean;
   onboardingComplete: boolean;
   notificationsEnabled: boolean;
+  openaiApiKey: string;
 }
 
 export interface AppState {

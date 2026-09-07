@@ -607,6 +607,12 @@ button {
   background: #111;
 }
 
+.camera-wrap {
+  position: relative;
+  overflow: hidden;
+  border-radius: 16px;
+}
+
 .camera-wrap video,
 .camera-wrap canvas,
 .camera-wrap img {
@@ -614,6 +620,37 @@ button {
   border-radius: 16px;
   background: #111;
   display: block;
+}
+
+.scan-beam {
+  position: absolute;
+  left: 6%;
+  right: 6%;
+  height: 3px;
+  background: linear-gradient(90deg, transparent, #f4e3a3, #c4a35a, #f4e3a3, transparent);
+  box-shadow: 0 0 16px #c4a35a;
+  animation: scan-beam 0.7s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.scan-label {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 12px;
+  margin: 0;
+  text-align: center;
+  color: #f7f1e4;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 0.72rem;
+}
+
+@keyframes scan-beam {
+  0% { top: 8%; }
+  50% { top: 88%; }
+  100% { top: 8%; }
 }
 
 .page-thumbs {
@@ -624,6 +661,21 @@ button {
   margin: 0 0 12px;
 }
 
+.page-thumb {
+  padding: 0;
+  border: 2px solid transparent;
+  background: none;
+  border-radius: 10px;
+}
+
+.page-thumb.active {
+  border-color: var(--forest);
+}
+
+.page-thumb.picked img {
+  outline: 2px solid var(--gold);
+}
+
 .page-thumbs img {
   width: 52px;
   height: 68px;
@@ -631,11 +683,80 @@ button {
   border-radius: 8px;
   background: #111;
   flex-shrink: 0;
+  display: block;
 }
 
 .page-thumbs span {
   color: var(--ink-soft);
   font-size: 0.8rem;
+}
+
+.scan-select {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  font-weight: 600;
+}
+
+.doc-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.doc-type-card {
+  background: var(--cream);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.doc-type-card.open {
+  outline: 2px solid var(--forest);
+}
+
+.doc-type-head {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  text-align: left;
+  background: none;
+  border: 0;
+  padding: 16px 18px;
+}
+
+.doc-type-head h3 {
+  margin: 0 0 4px;
+  font-size: 1.15rem;
+}
+
+.doc-rail {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  padding: 0 16px 16px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.doc-slide {
+  min-width: min(100%, 340px);
+  flex: 0 0 min(100%, 340px);
+  scroll-snap-align: start;
+}
+
+.doc-slide .doc-detail {
+  box-shadow: none;
+  border: 1px solid var(--line);
+}
+
+.doc-slide .preview img,
+.doc-slide .preview iframe {
+  height: 280px;
 }
 
 .crop-stage {
@@ -888,5 +1009,10 @@ button {
 
   .tree {
     overflow-x: auto;
+  }
+
+  .doc-slide {
+    min-width: 100%;
+    flex: 0 0 100%;
   }
 }

@@ -10,7 +10,6 @@ import type {
   ViewId,
 } from "./types";
 import { CATEGORIES, DOCUMENT_TYPES, suggestedPath, typeById } from "./data/taxonomy";
-import { classifyDocument } from "./data/classify";
 import { SAMPLE_DOCUMENTS, SAMPLE_INBOX } from "./data/sample";
 import { computeStatus, freshnessLabel, locationShort, providerLabel, storageVerb } from "./data/status";
 import { extractPdfText, isImage, isPdf } from "./lib/pdf";
@@ -18,7 +17,8 @@ import { extractImageText } from "./lib/ocr";
 import { consumeSharedFile, isDesktopLayout, isIos, isStandalone } from "./lib/pwa";
 import { buildBackup, downloadBackup, parseBackupFile, restoreBackup } from "./lib/backup";
 import { enableNotifications, listAttention, maybeNotify, type AttentionItem } from "./lib/reminders";
-import { cropImageFile, stitchImages, type CropInsets } from "./lib/scan";
+import { classifySmart } from "./lib/openai";
+import { cropImageFile, enhanceDocument, stitchImages, type CropInsets } from "./lib/scan";
 import {
   clearAllData,
   deleteDocument,
@@ -42,6 +42,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   showDemoHousehold: false,
   onboardingComplete: false,
   notificationsEnabled: false,
+  openaiApiKey: "",
 };
 
 const DEFAULT_CROP: CropInsets = { top: 4, right: 4, bottom: 4, left: 4 };
@@ -186,6 +187,7 @@ export default function App() {
   const [foundEmail, setFoundEmail] = useState<FoundEmailDoc[]>([]);
   const [view, setView] = useState<ViewId>("ready");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [expandedTypeId, setExpandedTypeId] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [addStart, setAddStart] = useState<"choose" | "camera">("choose");
   const [incomingFile, setIncomingFile] = useState<File | null>(null);
@@ -287,7 +289,6 @@ export default function App() {
     await saveInbox(next);
   };
 
-  const selected = documents.find((d) => d.id === selectedId) ?? null;
   const currentDocs = documents.filter((d) => d.isCurrent);
   const attention = useMemo(() => listAttention(documents), [documents]);
 
@@ -341,6 +342,7 @@ export default function App() {
     setIncomingFile(null);
     setAddStart("choose");
     setSelectedId(id);
+    setExpandedTypeId(record.typeId);
     setView("documents");
     setToast(`${record.title} added`);
   };
@@ -463,7 +465,7 @@ export default function App() {
             </h1>
             <p>
               {view === "ready" && "What’s current, missing, or overdue — organised by document type, not files."}
-              {view === "documents" && "A simple list of everything in your index, stored or referenced."}
+              {view === "documents" && "Tap a document type to open it here. Swipe left or right for other copies."}
               {view === "tree" && "A filing-cabinet view. The folders are logical; the files can live anywhere."}
               {view === "inbox" && "Letterbox or inbox: both are ways documents arrive. Email stays optional."}
               {view === "settings" && "Keep the privacy story clear. Local by default, convenience only if you choose it."}
@@ -491,7 +493,9 @@ export default function App() {
               documents={documents}
               attention={attention}
               onOpen={(id) => {
+                const doc = documents.find((item) => item.id === id);
                 setSelectedId(id);
+                setExpandedTypeId(doc?.typeId ?? null);
                 setView("documents");
               }}
               onAdd={() => {
@@ -504,9 +508,12 @@ export default function App() {
           {view === "documents" && (
             <DocumentsView
               documents={currentDocs}
-              selected={selected}
               allDocuments={documents}
-              onSelect={setSelectedId}
+              expandedTypeId={expandedTypeId}
+              onExpand={(typeId, documentId) => {
+                setExpandedTypeId(typeId);
+                if (documentId) setSelectedId(documentId);
+              }}
               onDeleted={async (id) => {
                 await deleteDocument(id);
                 setDocuments(documents.filter((d) => d.id !== id));
@@ -518,7 +525,9 @@ export default function App() {
             <TreeView
               documents={documents}
               onSelect={(id) => {
+                const doc = documents.find((item) => item.id === id);
                 setSelectedId(id);
+                setExpandedTypeId(doc?.typeId ?? null);
                 setView("documents");
               }}
             />
@@ -608,6 +617,7 @@ export default function App() {
           documents={documents}
           startAt={addStart}
           incomingFile={incomingFile}
+          openaiApiKey={settings.openaiApiKey}
           onClose={() => {
             setAddOpen(false);
             setIncomingFile(null);
@@ -715,17 +725,27 @@ function ReadyView({
 function DocumentsView({
   documents,
   allDocuments,
-  selected,
-  onSelect,
+  expandedTypeId,
+  onExpand,
   onDeleted,
 }: {
   documents: DocumentRecord[];
   allDocuments: DocumentRecord[];
-  selected: DocumentRecord | null;
-  onSelect: (id: string) => void;
+  expandedTypeId: string | null;
+  onExpand: (typeId: string | null, documentId?: string) => void;
   onDeleted: (id: string) => void;
 }) {
-  if (!documents.length) {
+  const groups = DOCUMENT_TYPES.filter((type) => type.id !== "other" || allDocuments.some((doc) => doc.typeId === "other"))
+    .map((type) => {
+      const copies = allDocuments
+        .filter((doc) => doc.typeId === type.id)
+        .sort((a, b) => Number(b.isCurrent) - Number(a.isCurrent) || b.createdAt.localeCompare(a.createdAt));
+      const current = documents.find((doc) => doc.typeId === type.id) ?? copies.find((doc) => doc.isCurrent) ?? copies[0];
+      return { type, copies, current };
+    })
+    .filter((group) => group.copies.length);
+
+  if (!groups.length) {
     return (
       <div className="card empty">
         <h2>Nothing indexed yet</h2>
@@ -738,39 +758,44 @@ function DocumentsView({
   }
 
   return (
-    <div className="detail">
-      <div className="grid docs-grid">
-        {documents.map((doc) => {
-          const status = computeStatus(doc);
-          return (
+    <div className="doc-stack">
+      {groups.map(({ type, copies, current }) => {
+        const open = expandedTypeId === type.id;
+        const status = current ? computeStatus(current) : "missing";
+        return (
+          <section key={type.id} className={`doc-type-card ${open ? "open" : ""}`}>
             <button
-              key={doc.id}
-              className="card"
-              onClick={() => onSelect(doc.id)}
-              style={selected?.id === doc.id ? { outline: "2px solid var(--forest)" } : undefined}
+              className="doc-type-head"
+              onClick={() => onExpand(open ? null : type.id, current?.id)}
             >
-              <div className="row" style={{ justifyContent: "space-between" }}>
-                <span className="kicker">{typeById(doc.typeId).label}</span>
-                <span className={`badge ${doc.storageKind}`}>{storageVerb(doc)}</span>
+              <div>
+                <div className="kicker">{CATEGORIES.find((category) => category.id === type.categoryId)?.label}</div>
+                <h3>{type.label}</h3>
+                <p className="meta">
+                  {current ? `${current.title} · ${freshnessLabel(current)}` : "No copy yet"}
+                </p>
               </div>
-              <h3>{doc.title}</h3>
-              <p className="meta">
-                {freshnessLabel(doc)} · {locationShort(doc)}
-                <br />
-                {doc.locationLabel}
-              </p>
-              <span className={`badge ${status}`}>{status === "current" ? "Current" : status}</span>
+              <span className={`badge ${status}`}>
+                {status === "current" ? "Current" : status === "expiring" ? "Expiring" : status}
+              </span>
             </button>
-          );
-        })}
-      </div>
-      {selected && (
-        <DocumentDetail
-          doc={selected}
-          previous={allDocuments.filter((d) => d.typeId === selected.typeId && !d.isCurrent)}
-          onDeleted={() => onDeleted(selected.id)}
-        />
-      )}
+            {open && (
+              <div className="doc-rail" aria-label={`${type.label} copies`}>
+                {copies.map((doc) => (
+                  <div key={doc.id} className="doc-slide">
+                    <DocumentDetail
+                      doc={doc}
+                      previous={copies.filter((item) => item.id !== doc.id && !item.isCurrent)}
+                      compact
+                      onDeleted={() => onDeleted(doc.id)}
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        );
+      })}
     </div>
   );
 }
@@ -778,10 +803,12 @@ function DocumentsView({
 function DocumentDetail({
   doc,
   previous,
+  compact,
   onDeleted,
 }: {
   doc: DocumentRecord;
   previous: DocumentRecord[];
+  compact?: boolean;
   onDeleted: () => void;
 }) {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -803,8 +830,8 @@ function DocumentDetail({
   }, [doc.id, doc.storageKind]);
 
   return (
-    <aside className="card">
-      <p className="kicker">Latest document</p>
+    <aside className="card doc-detail">
+      <p className="kicker">{doc.isCurrent ? "Latest document" : "Earlier copy"}</p>
       <h2>{doc.title}</h2>
       <p className="meta">
         {providerLabel(doc.locationProvider)}
@@ -830,7 +857,7 @@ function DocumentDetail({
         </div>
       )}
       <p className="meta">Last checked {doc.lastChecked}</p>
-      {previous.length > 0 && (
+      {!compact && previous.length > 0 && (
         <>
           <h3 style={{ marginTop: 18 }}>Previous versions</h3>
           <div className="list">
@@ -841,6 +868,9 @@ function DocumentDetail({
             ))}
           </div>
         </>
+      )}
+      {compact && previous.length > 0 && (
+        <p className="meta">Swipe for {previous.length} other cop{previous.length === 1 ? "y" : "ies"}.</p>
       )}
       <div className="row" style={{ marginTop: 16 }}>
         <button className="danger" onClick={onDeleted}>
@@ -1166,6 +1196,24 @@ function SettingsView({
         </button>
       </div>
       <div className="card">
+        <h2>Identify with OpenAI</h2>
+        <p className="meta">
+          Optional. If you add an API key, a scan is sent to OpenAI so the title matches the paper — for example
+          “Aviva Car Insurance 2026” — and it can save itself. The key stays on this phone. Leave blank to keep
+          identification on-device only.
+        </p>
+        <label className="field" style={{ marginTop: 12 }}>
+          <span>OpenAI API key</span>
+          <input
+            type="password"
+            autoComplete="off"
+            placeholder="sk-..."
+            value={settings.openaiApiKey}
+            onChange={(e) => onSettings({ ...settings, openaiApiKey: e.target.value.trim() })}
+          />
+        </label>
+      </div>
+      <div className="card">
         <h2>Backup and restore</h2>
         <p className="meta">
           The index lives in this browser. Download a backup before you change phones or clear site data, then
@@ -1205,16 +1253,18 @@ function AddDocumentModal({
   documents,
   startAt,
   incomingFile,
+  openaiApiKey,
   onClose,
   onSave,
 }: {
   documents: DocumentRecord[];
   startAt: "choose" | "camera";
   incomingFile: File | null;
+  openaiApiKey: string;
   onClose: () => void;
   onSave: (draft: AddDraft, makeCurrent: boolean) => Promise<void>;
 }) {
-  const [step, setStep] = useState<"choose" | "camera" | "review" | "crop" | "form" | "replace">(
+  const [step, setStep] = useState<"choose" | "camera" | "pages" | "crop" | "form" | "replace">(
     incomingFile ? "choose" : startAt,
   );
   const [busy, setBusy] = useState(false);
@@ -1223,8 +1273,10 @@ function AddDocumentModal({
   const [draft, setDraft] = useState<AddDraft | null>(null);
   const [existing, setExisting] = useState<DocumentRecord | null>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
-  const [pages, setPages] = useState<Array<{ id: string; file: File; url: string }>>([]);
+  const [pages, setPages] = useState<Array<{ id: string; file: File; url: string; selected: boolean }>>([]);
   const [pending, setPending] = useState<{ file: File; url: string } | null>(null);
+  const [activePage, setActivePage] = useState(0);
+  const [scanning, setScanning] = useState(false);
   const [crop, setCrop] = useState<CropInsets>(DEFAULT_CROP);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const ingested = useRef(false);
@@ -1247,7 +1299,7 @@ function AddDocumentModal({
     void (async () => {
       try {
         const media = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: "environment" } },
+          video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } },
         });
         if (cancelled) {
           media.getTracks().forEach((track) => track.stop());
@@ -1316,7 +1368,13 @@ function AddDocumentModal({
           text = "";
         }
       }
-      const classified = classifyDocument({ text, fileName: file.name });
+      setBusyLabel(openaiApiKey ? "Identifying the document…" : "Reading the page with on-device OCR…");
+      const classified = await classifySmart({
+        file,
+        fileName: file.name,
+        text,
+        apiKey: openaiApiKey || undefined,
+      });
       const next = applyClassification({
         method,
         file,
@@ -1338,7 +1396,18 @@ function AddDocumentModal({
         mimeType: file.type,
       });
       setDraft(next);
-      setStep("form");
+      const canAuto = classified.typeId !== "other" && classified.confidence !== "low";
+      if (canAuto) {
+        const match = documents.find((d) => d.typeId === next.typeId && d.isCurrent && d.typeId !== "other");
+        if (match) {
+          setExisting(match);
+          setStep("replace");
+        } else {
+          await onSave(next, true);
+        }
+      } else {
+        setStep("form");
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not read that file locally.");
     } finally {
@@ -1358,37 +1427,64 @@ function AddDocumentModal({
     setStream(null);
   };
 
+  const addCapturedPage = async (raw: File) => {
+    setBusy(true);
+    setBusyLabel("Sharpening the page…");
+    try {
+      const file = await enhanceDocument(raw);
+      const page = { id: uid(), file, url: URL.createObjectURL(file), selected: true };
+      setPages((current) => {
+        setActivePage(current.length);
+        return [...current, page];
+      });
+      setPending(null);
+      setStep("pages");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not keep that scan.");
+    } finally {
+      setBusy(false);
+      setScanning(false);
+    }
+  };
+
   const openPage = (file: File) => {
     stopCamera();
-    setPending({ file, url: URL.createObjectURL(file) });
-    setCrop(DEFAULT_CROP);
-    setStep("review");
+    void addCapturedPage(file);
   };
 
   const capturePhoto = async () => {
     const video = videoRef.current;
-    if (!video) return;
+    if (!video || scanning) return;
+    setScanning(true);
+    setError(null);
+    await new Promise((resolve) => window.setTimeout(resolve, 1400));
     const canvas = document.createElement("canvas");
-    canvas.width = video.videoWidth || 1280;
-    canvas.height = video.videoHeight || 720;
+    canvas.width = video.videoWidth || 1920;
+    canvas.height = video.videoHeight || 1080;
     const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    if (!ctx) {
+      setScanning(false);
+      return;
+    }
     ctx.drawImage(video, 0, 0);
-    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.92));
-    if (!blob) return;
-    openPage(new File([blob], `scan-${todayIso()}-p${pages.length + 1}.jpg`, { type: "image/jpeg" }));
-  };
-
-  const keepPage = () => {
-    if (!pending) return;
-    setPages((current) => [...current, { id: uid(), file: pending.file, url: pending.url }]);
-    setPending(null);
-    setStep("camera");
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.95));
+    if (!blob) {
+      setScanning(false);
+      return;
+    }
+    stopCamera();
+    await addCapturedPage(new File([blob], `scan-${todayIso()}-p${pages.length + 1}.jpg`, { type: "image/jpeg" }));
   };
 
   const finishScan = async (extra?: File) => {
-    const files = [...pages.map((page) => page.file), ...(extra ? [extra] : [])];
-    if (files.length === 0) return;
+    const files = [
+      ...pages.filter((page) => page.selected).map((page) => page.file),
+      ...(extra ? [extra] : []),
+    ];
+    if (files.length === 0) {
+      setError("Select at least one scan to save.");
+      return;
+    }
     stopCamera();
     setBusy(true);
     setBusyLabel(files.length > 1 ? "Joining pages and reading them…" : "Reading the page with on-device OCR…");
@@ -1414,10 +1510,14 @@ function AddDocumentModal({
     setBusy(true);
     setBusyLabel("Cropping the page…");
     try {
-      const file = await cropImageFile(pending.file, crop);
-      URL.revokeObjectURL(pending.url);
-      setPending({ file, url: URL.createObjectURL(file) });
-      setStep("review");
+      const cropped = await cropImageFile(pending.file, crop);
+      const file = await enhanceDocument(cropped);
+      const url = URL.createObjectURL(file);
+      setPages((current) =>
+        current.map((page, index) => (index === activePage ? { ...page, file, url, selected: true } : page)),
+      );
+      setPending(null);
+      setStep("pages");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not crop that page.");
     } finally {
@@ -1428,7 +1528,7 @@ function AddDocumentModal({
   const startCamera = async () => {
     try {
       const media = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: "environment" } },
+        video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } },
       });
       setStream(media);
     } catch {
@@ -1519,21 +1619,22 @@ function AddDocumentModal({
                 <span>{pages.length} page{pages.length === 1 ? "" : "s"} captured</span>
               </div>
             )}
-            <div className="camera-wrap">
+            <div className={`camera-wrap ${scanning ? "scanning" : ""}`}>
               <video ref={videoRef} id="soa-camera" autoPlay playsInline muted />
+              {scanning && (
+                <>
+                  <div className="scan-beam" />
+                  <p className="scan-label">Scanning…</p>
+                </>
+              )}
             </div>
             <div className="row" style={{ marginTop: 12 }}>
-              <button className="secondary" onClick={startCamera}>
+              <button className="secondary" onClick={startCamera} disabled={scanning}>
                 Allow camera
               </button>
-              <button className="primary" onClick={capturePhoto}>
-                Capture
+              <button className="primary" onClick={() => void capturePhoto()} disabled={scanning}>
+                {scanning ? "Scanning…" : "Capture"}
               </button>
-              {pages.length > 0 && (
-                <button className="primary" onClick={() => void finishScan()} disabled={busy}>
-                  Finish scan
-                </button>
-              )}
               <label className="secondary" style={{ display: "inline-flex" }}>
                 Use the phone camera roll
                 <input
@@ -1550,32 +1651,72 @@ function AddDocumentModal({
           </>
         )}
 
-        {step === "review" && pending && (
+        {step === "pages" && pages[activePage] && (
           <>
-            <h2>Check this page</h2>
-            <p className="meta">Crop the edges, retake it, add another page, or finish the scan.</p>
-            <div className="camera-wrap">
-              <img src={pending.url} alt="Captured page" />
+            <h2>Your scans</h2>
+            <p className="meta">
+              Tap a page to keep it or leave it out. Add another page if the letter has a back, then save the
+              ones you selected.
+            </p>
+            <div className="page-thumbs">
+              {pages.map((page, index) => (
+                <button
+                  key={page.id}
+                  className={`page-thumb ${index === activePage ? "active" : ""} ${page.selected ? "picked" : ""}`}
+                  onClick={() => setActivePage(index)}
+                >
+                  <img src={page.url} alt={`Page ${index + 1}`} />
+                </button>
+              ))}
             </div>
+            <div className="camera-wrap">
+              <img src={pages[activePage].url} alt={`Scan ${activePage + 1}`} />
+            </div>
+            <label className="scan-select">
+              <input
+                type="checkbox"
+                checked={pages[activePage].selected}
+                onChange={(e) =>
+                  setPages((current) =>
+                    current.map((page, index) =>
+                      index === activePage ? { ...page, selected: e.target.checked } : page,
+                    ),
+                  )
+                }
+              />
+              Use this scan
+            </label>
             <div className="row" style={{ marginTop: 12 }}>
               <button
                 className="secondary"
                 onClick={() => {
-                  URL.revokeObjectURL(pending.url);
-                  setPending(null);
-                  setStep("camera");
+                  const remaining = pages.length - 1;
+                  setPages((current) => current.filter((_, index) => index !== activePage));
+                  setActivePage((index) => Math.max(0, index - 1));
+                  setStep(remaining <= 0 ? "camera" : "pages");
                 }}
               >
-                Retake
+                Don’t use this one
               </button>
-              <button className="secondary" onClick={() => setStep("crop")}>
+              <button
+                className="secondary"
+                onClick={() => {
+                  setPending({ file: pages[activePage].file, url: pages[activePage].url });
+                  setCrop(DEFAULT_CROP);
+                  setStep("crop");
+                }}
+              >
                 Crop
               </button>
-              <button className="secondary" onClick={keepPage}>
+              <button className="secondary" onClick={() => setStep("camera")}>
                 Add another page
               </button>
-              <button className="primary" onClick={() => void finishScan(pending.file)} disabled={busy}>
-                Use this page
+              <button
+                className="primary"
+                onClick={() => void finishScan()}
+                disabled={busy || pages.every((page) => !page.selected)}
+              >
+                {openaiApiKey ? "Identify and save" : "Save selected scans"}
               </button>
             </div>
           </>
@@ -1619,7 +1760,7 @@ function AddDocumentModal({
               ))}
             </div>
             <div className="row">
-              <button className="secondary" onClick={() => setStep("review")}>
+              <button className="secondary" onClick={() => setStep("pages")}>
                 Cancel
               </button>
               <button className="primary" onClick={() => void applyCrop()} disabled={busy}>
