@@ -1960,6 +1960,20 @@ button {
   color: #1b6b3a;
 }
 
+.demo-scanner .scanner-preview {
+  touch-action: none;
+  user-select: none;
+  background: #2a1c12;
+}
+
+.demo-scanner-desk {
+  position: absolute;
+  max-width: none;
+  pointer-events: none;
+  transform-origin: center center;
+  will-change: left, top, width, height, transform;
+}
+
 .demo-viewfinder {
   position: relative;
   width: min(420px, 100%);

@@ -28,8 +28,10 @@ import { buildBackup, downloadBackup, parseBackupFile, restoreBackup } from "./l
 import { enableNotifications, listAttention, maybeNotify, type AttentionItem } from "./lib/reminders";
 import { classifySmart } from "./lib/openai";
 import { flattenImageFile } from "./lib/detect";
-import { demoLetterQuad, demoStartQuad, makeDemoLetterScenes, type DemoPoint } from "./lib/demoLetter";
+import { makeDemoLetterScenes } from "./lib/demoLetter";
+import { enableDemoMotion } from "./lib/demoScan";
 import { bleachScanBlob, cropImageFile, enhanceDocument, type CropInsets } from "./lib/scan";
+import { DemoScanner } from "./scanner/DemoScanner";
 import { ScannerScreen } from "./scanner/ScannerScreen";
 import {
   clearAllData,
@@ -69,10 +71,6 @@ const NAV_ITEMS: Array<{ id: ViewId; label: string; short: string }> = [
   { id: "inbox", label: "Inbox", short: "Inbox" },
   { id: "settings", label: "Settings", short: "Settings" },
 ];
-
-function sleep(ms: number) {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
-}
 
 function slugifyCatalogId(label: string, used: Set<string>): string {
   const base = label.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "") || "category";
@@ -661,7 +659,7 @@ export default function App() {
             </div>
             <p>
               {view === "ready" && "What’s current, missing, or overdue — organised by document type, not files."}
-              {view === "demo" && "Fit the outline to the letter, tap Scan, then see the result."}
+              {view === "demo" && "Move the phone to line up the letter, tap Scan, then see the result."}
               {view === "documents" && "Tap a category, then a type. Swipe the tabs for other types; swipe the page for other copies."}
               {view === "tree" && "A filing-cabinet view. The folders are logical; the files can live anywhere."}
               {view === "inbox" && "Letterbox or inbox: both are ways documents arrive. Email stays optional."}
@@ -851,78 +849,6 @@ export default function App() {
   );
 }
 
-function outlineFitted(corners: DemoPoint[], target: DemoPoint[], threshold = 0.075) {
-  return target.every((point, index) => {
-    const dx = corners[index].x - point.x;
-    const dy = corners[index].y - point.y;
-    return Math.hypot(dx, dy) < threshold;
-  });
-}
-
-function DemoOutline({
-  corners,
-  fitted,
-  locked,
-  onChange,
-}: {
-  corners: DemoPoint[];
-  fitted: boolean;
-  locked?: boolean;
-  onChange: (corners: DemoPoint[]) => void;
-}) {
-  const box = useRef<HTMLDivElement>(null);
-  const drag = useRef<number | null>(null);
-
-  const pointFromEvent = (event: PointerEvent<HTMLElement>): DemoPoint | null => {
-    const rect = box.current?.getBoundingClientRect();
-    if (!rect) return null;
-    return {
-      x: Math.min(0.98, Math.max(0.02, (event.clientX - rect.left) / rect.width)),
-      y: Math.min(0.98, Math.max(0.02, (event.clientY - rect.top) / rect.height)),
-    };
-  };
-
-  const moveCorner = (index: number, event: PointerEvent<HTMLElement>) => {
-    const next = pointFromEvent(event);
-    if (!next) return;
-    onChange(corners.map((corner, cornerIndex) => (cornerIndex === index ? next : corner)));
-  };
-
-  return (
-    <div className={`demo-outline ${fitted ? "fitted" : ""} ${locked ? "locked" : ""}`} ref={box}>
-      <svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-        <polygon points={corners.map((corner) => `${corner.x * 100},${corner.y * 100}`).join(" ")} />
-      </svg>
-      {corners.map((corner, index) => (
-        <button
-          key={index}
-          type="button"
-          className="demo-handle"
-          aria-label={`Move outline corner ${index + 1}`}
-          disabled={locked}
-          style={{ left: `${corner.x * 100}%`, top: `${corner.y * 100}%` }}
-          onPointerDown={(event) => {
-            if (locked) return;
-            event.preventDefault();
-            event.currentTarget.setPointerCapture(event.pointerId);
-            drag.current = index;
-          }}
-          onPointerMove={(event) => {
-            if (drag.current !== index) return;
-            moveCorner(index, event);
-          }}
-          onPointerUp={() => {
-            drag.current = null;
-          }}
-          onPointerCancel={() => {
-            drag.current = null;
-          }}
-        />
-      ))}
-    </div>
-  );
-}
-
 function DemoView({
   onSave,
   onTryReal,
@@ -930,17 +856,14 @@ function DemoView({
   onSave: (file: File) => Promise<void>;
   onTryReal: () => void;
 }) {
-  const [phase, setPhase] = useState<"intro" | "align" | "capturing" | "result">("intro");
-  const [status, setStatus] = useState("Preparing the camera…");
+  const [phase, setPhase] = useState<"intro" | "scanning" | "result">("intro");
   const [deskUrl, setDeskUrl] = useState<string | null>(null);
   const [cleanUrl, setCleanUrl] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
-  const [corners, setCorners] = useState<DemoPoint[]>(demoStartQuad);
   const [viewerOpen, setViewerOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(false);
-  const target = useMemo(() => demoLetterQuad(), []);
-  const fitted = outlineFitted(corners, target);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     return () => {
@@ -951,42 +874,26 @@ function DemoView({
 
   const prepareScenes = async () => {
     if (deskUrl && cleanUrl && file) return;
+    const scenes = await makeDemoLetterScenes();
+    if (deskUrl) URL.revokeObjectURL(deskUrl);
+    if (cleanUrl) URL.revokeObjectURL(cleanUrl);
+    setDeskUrl(URL.createObjectURL(scenes.desk));
+    setCleanUrl(URL.createObjectURL(scenes.clean));
+    setFile(scenes.clean);
+  };
+
+  const startScan = async () => {
+    setError(null);
     setLoading(true);
     try {
-      const scenes = await makeDemoLetterScenes();
-      if (deskUrl) URL.revokeObjectURL(deskUrl);
-      if (cleanUrl) URL.revokeObjectURL(cleanUrl);
-      setDeskUrl(URL.createObjectURL(scenes.desk));
-      setCleanUrl(URL.createObjectURL(scenes.clean));
-      setFile(scenes.clean);
+      await enableDemoMotion();
+      await prepareScenes();
+      setPhase("scanning");
+    } catch {
+      setError("The demo letter could not be drawn. Try again.");
     } finally {
       setLoading(false);
     }
-  };
-
-  const startAlign = async () => {
-    setCorners(demoStartQuad());
-    setPhase("align");
-    setStatus("Preparing the camera…");
-    try {
-      await prepareScenes();
-    } catch {
-      setStatus("The demo letter could not be drawn. Try again.");
-      setPhase("intro");
-    }
-  };
-
-  const captureScan = async () => {
-    setPhase("capturing");
-    setStatus("Hold still…");
-    await sleep(900);
-    setStatus("Finding the page…");
-    await sleep(1600);
-    setStatus("Straightening the letter…");
-    await sleep(1500);
-    setStatus("Saving a clean copy…");
-    await sleep(1300);
-    setPhase("result");
   };
 
   const saveResult = async () => {
@@ -1004,24 +911,26 @@ function DemoView({
       {phase === "intro" && (
         <>
           <p className="meta">
-            No paper needed. Fit the outline to a sample letter, tap Scan, and see where it lands.
+            No paper needed. A sample letter is already on the table. Move the phone to line it up — same as a real
+            scan — then tap the shutter.
           </p>
           <div className="demo-cta">
-            <button type="button" className="primary demo-try" disabled={loading} onClick={() => void startAlign()}>
+            <button type="button" className="primary demo-try" disabled={loading} onClick={() => void startScan()}>
               {loading ? "Opening the camera…" : "Try the demo"}
             </button>
             <button type="button" className="primary ready demo-real" onClick={onTryReal}>
               Try the real thing now
             </button>
           </div>
+          {error && <p className="meta">{error}</p>}
           <ol className="demo-menu compact">
             <li>
-              <strong>1. Fit the outline</strong>
-              <span>Drag the corners so they sit on the page edges.</span>
+              <strong>1. Move the phone</strong>
+              <span>The outline finds the page. Follow Move closer, Move left, Hold steady.</span>
             </li>
             <li>
-              <strong>2. Tap Scan</strong>
-              <span>Same shutter as the real camera in this tab.</span>
+              <strong>2. Tap the shutter</strong>
+              <span>Same button as the real camera in this tab. It turns green when it says Ready.</span>
             </li>
             <li>
               <strong>3. See the result</strong>
@@ -1031,41 +940,8 @@ function DemoView({
         </>
       )}
 
-      {(phase === "align" || phase === "capturing") && (
-        <div className="demo-stage">
-          <p className={`demo-align-hint ${fitted ? "ok" : ""}`}>
-            {phase === "capturing"
-              ? status
-              : fitted
-                ? "Looks good — tap Scan"
-                : "Drag the corners so the outline fits the letter"}
-          </p>
-          <div className="demo-viewfinder">
-            {deskUrl ? <img src={deskUrl} alt="Sample letter on a table" /> : <div className="demo-viewfinder-wait" />}
-            {deskUrl && (
-              <DemoOutline
-                corners={corners}
-                fitted={fitted}
-                locked={phase === "capturing"}
-                onChange={setCorners}
-              />
-            )}
-            {phase === "capturing" && <div className="scan-beam" />}
-            <div className="demo-shutter-bar">
-              <button
-                type="button"
-                className={`scanner-shutter ${fitted ? "ready" : ""}`}
-                disabled={phase === "capturing" || !deskUrl}
-                aria-label="Scan this page"
-                onClick={() => void captureScan()}
-              />
-              <span>{phase === "capturing" ? "Saving" : fitted ? "Ready" : "Fit the page"}</span>
-            </div>
-          </div>
-          <button type="button" className="primary ready demo-real" onClick={onTryReal}>
-            Try the real thing now
-          </button>
-        </div>
+      {phase === "scanning" && deskUrl && (
+        <DemoScanner deskUrl={deskUrl} onClose={() => setPhase("intro")} onCaptured={() => setPhase("result")} />
       )}
 
       {phase === "result" && cleanUrl && (
@@ -1095,7 +971,7 @@ function DemoView({
             <button type="button" className="secondary" onClick={() => setViewerOpen(true)}>
               View the full page
             </button>
-            <button type="button" className="ghost" onClick={() => void startAlign()}>
+            <button type="button" className="ghost" onClick={() => void startScan()}>
               Try the demo again
             </button>
           </div>
