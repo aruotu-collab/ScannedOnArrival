@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { createPortal } from "react-dom";
 import type {
   AddDraft,
@@ -1067,6 +1067,37 @@ function copiesForType(documents: DocumentRecord[], typeId: string) {
     .sort((a, b) => Number(b.isCurrent) - Number(a.isCurrent) || b.createdAt.localeCompare(a.createdAt));
 }
 
+function prefersReducedMotion() {
+  return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+}
+
+function documentsScroller() {
+  return document.scrollingElement ?? document.documentElement;
+}
+
+function scrollCategoryToTop(categoryId: string, behavior: ScrollBehavior) {
+  const card = document.getElementById(`category-${categoryId}`);
+  if (!card) return;
+  const scroller = documentsScroller();
+  const top = Math.max(0, scroller.scrollTop + card.getBoundingClientRect().top - 12);
+  if (behavior === "auto" || prefersReducedMotion()) {
+    scroller.scrollTop = top;
+    return;
+  }
+  const start = scroller.scrollTop;
+  const delta = top - start;
+  if (Math.abs(delta) < 2) return;
+  const duration = 340;
+  const began = performance.now();
+  const step = (now: number) => {
+    const t = Math.min(1, (now - began) / duration);
+    const eased = 1 - (1 - t) ** 3;
+    scroller.scrollTop = start + delta * eased;
+    if (t < 1) window.requestAnimationFrame(step);
+  };
+  window.requestAnimationFrame(step);
+}
+
 function TypeTabStrip({
   types,
   documents,
@@ -1082,11 +1113,11 @@ function TypeTabStrip({
   const swiped = useRef(false);
 
   useEffect(() => {
-    document.getElementById(`type-tab-${selectedId}`)?.scrollIntoView({
-      behavior: "smooth",
-      inline: "center",
-      block: "nearest",
-    });
+    const tab = document.getElementById(`type-tab-${selectedId}`);
+    const strip = tab?.closest(".doc-type-tabs");
+    if (!tab || !(strip instanceof HTMLElement)) return;
+    const left = tab.offsetLeft - strip.clientWidth / 2 + tab.offsetWidth / 2;
+    strip.scrollTo({ left: Math.max(0, left), behavior: prefersReducedMotion() ? "auto" : "smooth" });
   }, [selectedId]);
 
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
@@ -1282,34 +1313,54 @@ function DocumentsView({
     catalog.find((group) => group.count > 0)?.category.id ??
     catalog[0]?.category.id ??
     null;
+  const pendingPin = useRef<{ id: string; y: number } | null>(null);
 
-  const selectType = (typeId: string) => {
+  const selectType = (typeId: string, pinY?: number) => {
+    const categoryId = typeById(typeId).categoryId;
+    if (pinY != null && categoryId !== selectedCategoryId) {
+      pendingPin.current = { id: categoryId, y: pinY };
+    }
     const copies = copiesForType(allDocuments, typeId);
     const current = copies.find((doc) => doc.isCurrent) ?? copies[0];
     onExpand(typeId, current?.id);
-    window.requestAnimationFrame(() => {
-      document.getElementById(`category-${typeById(typeId).categoryId}`)?.scrollIntoView({
-        behavior: "smooth",
-        block: "start",
-      });
-    });
   };
 
-  const selectCategory = (categoryId: string) => {
+  const selectCategory = (categoryId: string, pinY?: number) => {
     const group = catalog.find((item) => item.category.id === categoryId);
     if (!group) return;
     if (selectedCategoryId === categoryId && expandedTypeId) {
-      window.requestAnimationFrame(() => {
-        document.getElementById(`category-${categoryId}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
-      });
+      scrollCategoryToTop(categoryId, prefersReducedMotion() ? "auto" : "smooth");
       return;
     }
     const preferred =
       group.types.find((type) => type.id === expandedTypeId) ??
       group.types.find((type) => copiesForType(allDocuments, type.id).length > 0) ??
       group.types[0];
-    if (preferred) selectType(preferred.id);
+    if (preferred) selectType(preferred.id, pinY);
   };
+
+  useLayoutEffect(() => {
+    if (!selectedCategoryId) return;
+    const pin = pendingPin.current;
+    pendingPin.current = null;
+    const card = document.getElementById(`category-${selectedCategoryId}`);
+    if (!card) return;
+
+    if (pin && pin.id === selectedCategoryId) {
+      const drift = card.getBoundingClientRect().top - pin.y;
+      if (Math.abs(drift) > 1) {
+        documentsScroller().scrollTop += drift;
+      }
+    }
+
+    const rise = () => scrollCategoryToTop(selectedCategoryId, prefersReducedMotion() ? "auto" : "smooth");
+    const frame = window.requestAnimationFrame(() => window.requestAnimationFrame(rise));
+    const retry = window.setTimeout(rise, 360);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(retry);
+    };
+  }, [selectedCategoryId]);
 
   return (
     <>
@@ -1338,7 +1389,7 @@ function DocumentsView({
               type="button"
               className="doc-category-card-head"
               aria-pressed={selected}
-              onClick={() => selectCategory(group.category.id)}
+              onClick={(event) => selectCategory(group.category.id, event.currentTarget.getBoundingClientRect().top)}
             >
               <div>
                 <h2>{group.category.label}</h2>
@@ -1352,47 +1403,49 @@ function DocumentsView({
               {selected && <span className="badge current">Selected</span>}
             </button>
             {selected && activeType && (
-              <>
-                <TypeTabStrip
-                  types={group.types}
-                  documents={allDocuments}
-                  selectedId={activeType.id}
-                  onSelect={selectType}
-                />
-                <div className="doc-type-toolbar">
-                  <div className="doc-type-selected">
-                    <div>
-                      <h3>
-                        {activeType.label} <span className="doc-count">{copies.length}</span>
-                      </h3>
-                      <p className="meta">
-                        {copies.length === 0
-                          ? "Nothing saved here yet. Scan into this type."
-                          : current
-                            ? `${copies.length} ${copies.length === 1 ? "document" : "documents"} · ${freshnessLabel(current)}`
-                            : `${copies.length} ${copies.length === 1 ? "document" : "documents"}`}
-                      </p>
-                    </div>
-                    <span className={`badge ${status}`}>{statusBadgeText(status)}</span>
-                  </div>
-                  <ScanCta compact onScan={() => onScan(activeType.id)} onAdd={onAdd} />
-                </div>
-                {copies.length === 0 && <p className="meta doc-type-empty">Nothing saved here yet.</p>}
-                {current && (
-                  <div className="doc-rail" aria-label={`${activeType.label} copies`}>
-                    {copies.map((doc) => (
-                      <div key={doc.id} className="doc-slide">
-                        <DocumentDetail
-                          doc={doc}
-                          previous={copies.filter((item) => item.id !== doc.id && !item.isCurrent)}
-                          compact
-                          onDeleted={() => onDeleted(doc.id)}
-                        />
+              <div className="doc-category-body">
+                <div className="doc-category-body-inner">
+                  <TypeTabStrip
+                    types={group.types}
+                    documents={allDocuments}
+                    selectedId={activeType.id}
+                    onSelect={selectType}
+                  />
+                  <div className="doc-type-toolbar">
+                    <div className="doc-type-selected">
+                      <div>
+                        <h3>
+                          {activeType.label} <span className="doc-count">{copies.length}</span>
+                        </h3>
+                        <p className="meta">
+                          {copies.length === 0
+                            ? "Nothing saved here yet. Scan into this type."
+                            : current
+                              ? `${copies.length} ${copies.length === 1 ? "document" : "documents"} · ${freshnessLabel(current)}`
+                              : `${copies.length} ${copies.length === 1 ? "document" : "documents"}`}
+                        </p>
                       </div>
-                    ))}
+                      <span className={`badge ${status}`}>{statusBadgeText(status)}</span>
+                    </div>
+                    <ScanCta compact onScan={() => onScan(activeType.id)} onAdd={onAdd} />
                   </div>
-                )}
-              </>
+                  {copies.length === 0 && <p className="meta doc-type-empty">Nothing saved here yet.</p>}
+                  {current && (
+                    <div className="doc-rail" aria-label={`${activeType.label} copies`}>
+                      {copies.map((doc) => (
+                        <div key={doc.id} className="doc-slide">
+                          <DocumentDetail
+                            doc={doc}
+                            previous={copies.filter((item) => item.id !== doc.id && !item.isCurrent)}
+                            compact
+                            onDeleted={() => onDeleted(doc.id)}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
             )}
           </section>
         );

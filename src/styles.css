@@ -1122,6 +1122,26 @@ button {
   font-size: 1.2rem;
 }
 
+.doc-category-body {
+  display: grid;
+  grid-template-rows: 1fr;
+  animation: doc-category-open 0.32s ease;
+}
+
+.doc-category-body-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+
+@keyframes doc-category-open {
+  from {
+    grid-template-rows: 0fr;
+  }
+  to {
+    grid-template-rows: 1fr;
+  }
+}
+
 .doc-type-tabs {
   display: flex;
   gap: 8px;
@@ -1786,6 +1806,10 @@ button {
   .scan-beam {
     animation: none;
     top: 46%;
+  }
+
+  .doc-category-body {
+    animation: none;
   }
 }
 
