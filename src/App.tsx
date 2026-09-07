@@ -347,6 +347,22 @@ export default function App() {
     return { categoryId, typeId };
   };
 
+  const createType = async (label: string, categoryId: string) => {
+    const trimmed = label.trim();
+    if (!trimmed) throw new Error("Enter a document type name.");
+    const existing = allTypes().find(
+      (type) => type.categoryId === categoryId && type.label.toLowerCase() === trimmed.toLowerCase(),
+    );
+    if (existing) return { typeId: existing.id, categoryId };
+    const used = new Set([...allCategories().map((category) => category.id), ...allTypes().map((type) => type.id)]);
+    const typeId = slugifyCatalogId(trimmed, used);
+    await persistSettings({
+      ...settings,
+      customTypes: [...(settings.customTypes ?? []), { id: typeId, label: trimmed, categoryId }],
+    });
+    return { typeId, categoryId };
+  };
+
   const persistDocs = async (next: DocumentRecord[]) => {
     setDocuments(next);
     await saveDocuments(next);
@@ -701,6 +717,7 @@ export default function App() {
           }}
           onSave={addDocument}
           onCreateCategory={createCategory}
+          onCreateType={createType}
         />
       )}
       {toast && <div className="toast">{toast}</div>}
@@ -1559,6 +1576,7 @@ function AddDocumentModal({
   onClose,
   onSave,
   onCreateCategory,
+  onCreateType,
 }: {
   documents: DocumentRecord[];
   startAt: "choose" | "camera";
@@ -1568,6 +1586,7 @@ function AddDocumentModal({
   onClose: () => void;
   onSave: (draft: AddDraft, makeCurrent: boolean) => Promise<void>;
   onCreateCategory: (label: string) => Promise<{ categoryId: string; typeId: string }>;
+  onCreateType: (label: string, categoryId: string) => Promise<{ typeId: string; categoryId: string }>;
 }) {
   const [step, setStep] = useState<"choose" | "camera" | "pages" | "crop" | "form" | "replace">(
     incomingFile ? "choose" : startAt,
@@ -1583,6 +1602,8 @@ function AddDocumentModal({
   const [crop, setCrop] = useState<CropInsets>(DEFAULT_CROP);
   const [newCategory, setNewCategory] = useState("");
   const [creatingCategory, setCreatingCategory] = useState(false);
+  const [newType, setNewType] = useState("");
+  const [creatingType, setCreatingType] = useState(false);
   const [viewingPage, setViewingPage] = useState(false);
   const ingested = useRef(false);
 
@@ -2036,9 +2057,11 @@ function AddDocumentModal({
                 onChange={(e) => {
                   if (e.target.value === "__new__") {
                     setCreatingCategory(true);
+                    setCreatingType(false);
                     return;
                   }
                   setCreatingCategory(false);
+                  setCreatingType(false);
                   const categoryId = e.target.value;
                   const types = allTypes().filter((type) => type.categoryId === categoryId);
                   const keep = types.some((type) => type.id === draft.typeId);
@@ -2098,8 +2121,13 @@ function AddDocumentModal({
             <label className="field">
               <span>Document type</span>
               <select
-                value={draft.typeId}
+                value={creatingType ? "__new__" : draft.typeId}
                 onChange={(e) => {
+                  if (e.target.value === "__new__") {
+                    setCreatingType(true);
+                    return;
+                  }
+                  setCreatingType(false);
                   const type = typeById(e.target.value);
                   setDraft({
                     ...draft,
@@ -2116,8 +2144,45 @@ function AddDocumentModal({
                       {type.label}
                     </option>
                   ))}
+                <option value="__new__">Create a new document type…</option>
               </select>
             </label>
+            {creatingType && (
+              <div className="row">
+                <label className="field" style={{ flex: 1 }}>
+                  <span>New document type</span>
+                  <input
+                    value={newType}
+                    onChange={(e) => setNewType(e.target.value)}
+                    placeholder="School letter, NHS letter…"
+                  />
+                </label>
+                <button
+                  className="primary"
+                  type="button"
+                  disabled={!newType.trim() || creatingCategory}
+                  onClick={() => {
+                    void (async () => {
+                      try {
+                        const created = await onCreateType(newType, draft.categoryId);
+                        setCreatingType(false);
+                        setNewType("");
+                        setDraft({
+                          ...draft,
+                          typeId: created.typeId as DocumentTypeId,
+                          categoryId: created.categoryId,
+                          title: draft.title || newType.trim(),
+                        });
+                      } catch (err) {
+                        setError(err instanceof Error ? err.message : "Could not create that document type.");
+                      }
+                    })();
+                  }}
+                >
+                  Create
+                </button>
+              </div>
+            )}
             <label className="field">
               <span>Period</span>
               <input
