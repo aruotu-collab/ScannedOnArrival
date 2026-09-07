@@ -280,6 +280,7 @@ export default function App() {
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [demoLanding, setDemoLanding] = useState(false);
+  const [fromDemoNav, setFromDemoNav] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -457,6 +458,18 @@ export default function App() {
     setView("demo");
   };
 
+  const goToView = (next: ViewId) => {
+    if (view === "demo" && next === "documents") setFromDemoNav(true);
+    setView(next);
+  };
+
+  const openRealThing = () => {
+    setDemoLanding(false);
+    setFromDemoNav(false);
+    setView("ready");
+    openAdd("camera");
+  };
+
   const saveDemoScan = async (files: File[], savedTitle?: string) => {
     const pageFiles = files.filter(Boolean);
     const file = pageFiles[0];
@@ -627,7 +640,7 @@ export default function App() {
         </div>
         <nav className="nav">
           {NAV_ITEMS.map(({ id, label }) => (
-            <button key={id} className={view === id ? "active" : ""} onClick={() => setView(id)}>
+            <button key={id} className={view === id ? "active" : ""} onClick={() => goToView(id)}>
               {label}
             </button>
           ))}
@@ -672,7 +685,22 @@ export default function App() {
             </p>
           </div>
         </header>
-        {view !== "demo" && !demoLanding && (
+        {view === "documents" && (demoLanding || fromDemoNav) && (
+          <div className="scan-hero">
+            <button type="button" className="primary ready demo-real demo-landing-real" onClick={openRealThing}>
+              Try the real thing now
+            </button>
+          </div>
+        )}
+        {view !== "demo" && view !== "documents" && !demoLanding && (
+          <div className="scan-hero">
+            <ScanCta
+              onScan={() => openAdd("camera")}
+              onAdd={() => openAdd("choose")}
+            />
+          </div>
+        )}
+        {view === "documents" && !demoLanding && !fromDemoNav && (
           <div className="scan-hero">
             <ScanCta
               onScan={() => openAdd("camera")}
@@ -707,10 +735,7 @@ export default function App() {
           {view === "demo" && (
             <DemoView
               onSave={saveDemoScan}
-              onTryReal={() => {
-                setView("ready");
-                openAdd("camera");
-              }}
+              onTryReal={openRealThing}
             />
           )}
           {view === "documents" && (
@@ -719,7 +744,9 @@ export default function App() {
               allDocuments={documents}
               expandedTypeId={expandedTypeId}
               fromDemo={demoLanding}
+              showRealCta={demoLanding || fromDemoNav}
               onDismissDemo={() => setDemoLanding(false)}
+              onTryReal={openRealThing}
               onExpand={(typeId, documentId) => {
                 setExpandedTypeId(typeId);
                 if (documentId) setSelectedId(documentId);
@@ -825,7 +852,7 @@ export default function App() {
 
       <nav className="mobile-nav">
         {NAV_ITEMS.map(({ id, short }) => (
-          <button key={id} className={view === id ? "active" : ""} onClick={() => setView(id)}>
+          <button key={id} className={view === id ? "active" : ""} onClick={() => goToView(id)}>
             {short}
           </button>
         ))}
@@ -873,8 +900,11 @@ function DemoView({
   const [error, setError] = useState<string | null>(null);
   const [title, setTitle] = useState("Council Tax 2026–27");
   const [period, setPeriod] = useState("2026–27");
+  const swipeStart = useRef<{ x: number; y: number } | null>(null);
+  const swiped = useRef(false);
 
   const currentPage = pages[activePage];
+  const demoPageLimit = 3;
 
   useEffect(() => {
     return () => {
@@ -910,11 +940,33 @@ function DemoView({
   const keepCapture = () => {
     if (!file || !cleanUrl) return;
     setPages((current) => {
+      if (current.length >= demoPageLimit) return current;
       const next = [...current, { id: uid(), file, url: cleanUrl, selected: true }];
       setActivePage(next.length - 1);
       return next;
     });
     setPhase("pages");
+  };
+
+  const goToPage = (next: number) => {
+    setActivePage(Math.max(0, Math.min(pages.length - 1, next)));
+  };
+
+  const onPagePointerDown = (event: PointerEvent<HTMLDivElement>) => {
+    if (pages.length < 2) return;
+    swipeStart.current = { x: event.clientX, y: event.clientY };
+    swiped.current = false;
+  };
+
+  const onPagePointerUp = (event: PointerEvent<HTMLDivElement>) => {
+    const start = swipeStart.current;
+    swipeStart.current = null;
+    if (!start || pages.length < 2) return;
+    const dx = event.clientX - start.x;
+    const dy = event.clientY - start.y;
+    if (Math.abs(dx) < 40 || Math.abs(dx) <= Math.abs(dy)) return;
+    swiped.current = true;
+    goToPage(activePage + (dx < 0 ? 1 : -1));
   };
 
   const dropPage = () => {
@@ -999,7 +1051,11 @@ function DemoView({
             </div>
             <span className="scanner-icon-btn ghost" aria-hidden="true" />
           </div>
-          <p className="meta">Add another page if the letter has a back, or save this file.</p>
+          <p className="meta">
+            {pages.length > 1
+              ? `Swipe or drag sideways for page ${activePage + 1} of ${pages.length}. Demo mode keeps up to 3 pages.`
+              : "Add another page if the letter has a back, or save this file. Demo mode keeps up to 3 pages."}
+          </p>
           {pages.length > 1 && (
             <div className="page-thumbs">
               {pages.map((page, index) => (
@@ -1013,9 +1069,34 @@ function DemoView({
               ))}
             </div>
           )}
-          <button type="button" className="demo-review-page" onClick={() => setViewerOpen(true)}>
-            <img src={currentPage.url} alt={`Scan ${activePage + 1}`} />
-          </button>
+          <div
+            className={`demo-page-rail ${pages.length > 1 ? "swipeable" : ""}`}
+            onPointerDown={onPagePointerDown}
+            onPointerUp={onPagePointerUp}
+            onPointerCancel={() => {
+              swipeStart.current = null;
+            }}
+          >
+            <div
+              className="demo-page-track"
+              style={{ transform: `translateX(-${activePage * 100}%)` }}
+            >
+              {pages.map((page, index) => (
+                <button
+                  key={page.id}
+                  type="button"
+                  className="demo-review-page"
+                  onClick={() => {
+                    if (swiped.current) return;
+                    setViewerOpen(true);
+                  }}
+                >
+                  <img src={page.url} alt={`Scan ${index + 1}`} draggable={false} />
+                  {pages.length > 1 && <span className="demo-page-index">Page {index + 1}</span>}
+                </button>
+              ))}
+            </div>
+          </div>
           <label className="scan-select">
             <input
               type="checkbox"
@@ -1031,9 +1112,13 @@ function DemoView({
             Use this scan · tap the page to view the full file
           </label>
           <div className="scan-pages-actions">
-            <button className="primary" type="button" onClick={() => setPhase("scanning")}>
-              Add another page
-            </button>
+            {pages.length < demoPageLimit ? (
+              <button className="primary" type="button" onClick={() => setPhase("scanning")}>
+                Add another page
+              </button>
+            ) : (
+              <p className="meta">Demo mode keeps up to 3 pages.</p>
+            )}
             <button
               className="primary"
               type="button"
@@ -1413,7 +1498,9 @@ function DocumentsView({
   allDocuments,
   expandedTypeId,
   fromDemo,
+  showRealCta,
   onDismissDemo,
+  onTryReal,
   onExpand,
   onAdd,
   onScan,
@@ -1423,7 +1510,9 @@ function DocumentsView({
   allDocuments: DocumentRecord[];
   expandedTypeId: string | null;
   fromDemo?: boolean;
+  showRealCta?: boolean;
   onDismissDemo?: () => void;
+  onTryReal?: () => void;
   onExpand: (typeId: string | null, documentId?: string) => void;
   onAdd: () => void;
   onScan: (typeId: string) => void;
@@ -1585,7 +1674,7 @@ function DocumentsView({
                       </div>
                       <span className={`badge ${status}`}>{statusBadgeText(status)}</span>
                     </div>
-                    {!fromDemo && <ScanCta compact onScan={() => onScan(activeType.id)} onAdd={onAdd} />}
+                    {!showRealCta && <ScanCta compact onScan={() => onScan(activeType.id)} onAdd={onAdd} />}
                   </div>
                   {copies.length === 0 && <p className="meta doc-type-empty">Nothing saved here yet.</p>}
                   {current && (

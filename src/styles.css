@@ -1882,6 +1882,19 @@ button {
   margin: 0 12px 10px;
 }
 
+.demo-landing-real {
+  display: flex;
+  width: calc(100% - 24px);
+  margin: 0 12px 12px;
+  justify-content: center;
+  text-align: center;
+}
+
+.scan-hero .demo-landing-real {
+  width: 100%;
+  margin: 0;
+}
+
 .demo-landing strong {
   display: block;
   margin-bottom: 4px;
@@ -2092,6 +2105,56 @@ button {
 .demo-review .scanner-icon-btn {
   background: var(--forest);
   color: #f7f1e4;
+}
+
+.demo-page-rail {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  overflow: hidden;
+  touch-action: pan-y;
+}
+
+.demo-page-rail.swipeable {
+  cursor: grab;
+  touch-action: pan-y pinch-zoom;
+}
+
+.demo-page-rail.swipeable:active {
+  cursor: grabbing;
+}
+
+.demo-page-track {
+  display: flex;
+  height: 100%;
+  width: 100%;
+  transition: transform 0.28s ease;
+  will-change: transform;
+}
+
+.demo-page-rail .demo-review-page {
+  position: relative;
+  flex: 0 0 100%;
+  min-width: 100%;
+  height: 100%;
+}
+
+.demo-page-index {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  border-radius: 999px;
+  background: rgba(47, 47, 40, 0.78);
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 4px 10px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .demo-page-track {
+    transition: none;
+  }
 }
 
 .demo-review-page {
