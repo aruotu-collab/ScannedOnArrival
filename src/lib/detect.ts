@@ -1,3 +1,5 @@
+import { getVideoLayout, videoPointToDisplay } from "../scanner/coordinates";
+
 export type Point = { x: number; y: number };
 
 export type Quad = {
@@ -523,7 +525,13 @@ export function drawScanOverlay(canvas: HTMLCanvasElement, video: HTMLVideoEleme
 
   if (!result.corners || result.frameWidth < 2 || result.frameHeight < 2) return;
 
-  const quad = scaleQuad(result.corners, displayW / result.frameWidth, displayH / result.frameHeight);
+  const layout = getVideoLayout(video);
+  const quad = {
+    topLeft: videoPointToDisplay(result.corners.topLeft, layout),
+    topRight: videoPointToDisplay(result.corners.topRight, layout),
+    bottomRight: videoPointToDisplay(result.corners.bottomRight, layout),
+    bottomLeft: videoPointToDisplay(result.corners.bottomLeft, layout),
+  };
   ctx.save();
   ctx.fillStyle = result.locked ? "rgba(20, 40, 30, 0.28)" : "rgba(12, 10, 8, 0.38)";
   ctx.beginPath();

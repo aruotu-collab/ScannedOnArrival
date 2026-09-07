@@ -18,15 +18,9 @@ import { consumeSharedFile, isDesktopLayout, isIos, isStandalone } from "./lib/p
 import { buildBackup, downloadBackup, parseBackupFile, restoreBackup } from "./lib/backup";
 import { enableNotifications, listAttention, maybeNotify, type AttentionItem } from "./lib/reminders";
 import { classifySmart } from "./lib/openai";
-import {
-  detectFromVideo,
-  drawScanOverlay,
-  flattenCapturedFrame,
-  flattenImageFile,
-  loadOpenCV,
-  type Quad,
-} from "./lib/detect";
+import { flattenImageFile } from "./lib/detect";
 import { cropImageFile, enhanceDocument, stitchImages, type CropInsets } from "./lib/scan";
+import { ScannerScreen } from "./scanner/ScannerScreen";
 import {
   clearAllData,
   deleteDocument,
@@ -1322,112 +1316,11 @@ function AddDocumentModal({
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState<AddDraft | null>(null);
   const [existing, setExisting] = useState<DocumentRecord | null>(null);
-  const [stream, setStream] = useState<MediaStream | null>(null);
   const [pages, setPages] = useState<Array<{ id: string; file: File; url: string; selected: boolean }>>([]);
   const [pending, setPending] = useState<{ file: File; url: string } | null>(null);
   const [activePage, setActivePage] = useState(0);
-  const [scanning, setScanning] = useState(false);
   const [crop, setCrop] = useState<CropInsets>(DEFAULT_CROP);
-  const [scanLock, setScanLock] = useState(false);
-  const [scanHint, setScanHint] = useState("Preparing the scanner…");
-  const [hasPage, setHasPage] = useState(false);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const overlayRef = useRef<HTMLCanvasElement | null>(null);
-  const cornersRef = useRef<Quad | null>(null);
-  const scanningRef = useRef(false);
   const ingested = useRef(false);
-
-  useEffect(() => {
-    return () => {
-      stream?.getTracks().forEach((track) => track.stop());
-    };
-  }, [stream]);
-
-  useEffect(() => {
-    if (videoRef.current && stream) {
-      videoRef.current.srcObject = stream;
-    }
-  }, [stream]);
-
-  useEffect(() => {
-    if (step !== "camera") return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const media = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } },
-        });
-        if (cancelled) {
-          media.getTracks().forEach((track) => track.stop());
-          return;
-        }
-        setStream(media);
-      } catch {
-        if (!cancelled) setError("Camera permission was declined. You can still upload a photo instead.");
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [step]);
-
-  useEffect(() => {
-    if (step !== "camera") {
-      setScanLock(false);
-      setHasPage(false);
-      setScanHint("Preparing the scanner…");
-      cornersRef.current = null;
-      return;
-    }
-    let alive = true;
-    let raf = 0;
-    let lastDetect = 0;
-    let goodStreak = 0;
-    setScanHint("Preparing the scanner…");
-    void (async () => {
-      try {
-        await loadOpenCV();
-        if (!alive) return;
-        setScanHint("Fit the whole page inside the frame.");
-      } catch (err) {
-        if (alive) setError(err instanceof Error ? err.message : "Could not start the scanner.");
-        return;
-      }
-      const tick = (now: number) => {
-        if (!alive) return;
-        const video = videoRef.current;
-        const overlay = overlayRef.current;
-        if (video && overlay && video.readyState >= 2 && video.videoWidth > 0) {
-          if (now - lastDetect > 140 && !scanningRef.current) {
-            lastDetect = now;
-            try {
-              const result = detectFromVideo(video);
-              goodStreak = result.locked ? goodStreak + 1 : 0;
-              const locked = goodStreak >= 2;
-              const shown = {
-                ...result,
-                locked,
-                hint: locked ? "Looking good — tap Capture." : result.hint,
-              };
-              cornersRef.current = shown.corners;
-              setHasPage(Boolean(shown.corners));
-              setScanLock(locked);
-              setScanHint(shown.hint);
-              drawScanOverlay(overlay, video, shown);
-            } catch {
-              setScanHint("Fit the whole page inside the frame.");
-            }
-          }
-        }
-        raf = requestAnimationFrame(tick);
-      };
-      raf = requestAnimationFrame(tick);
-    })();
-    return () => {
-      alive = false;
-      cancelAnimationFrame(raf);
-    };
-  }, [step]);
 
   const beginMethod = (method: SourceKind) => {
     const storageKind = method === "reference" ? "referenced" : "stored";
@@ -1536,11 +1429,6 @@ function AddDocumentModal({
     void handleFile(incomingFile, method, "stored");
   }, [incomingFile]);
 
-  const stopCamera = () => {
-    stream?.getTracks().forEach((track) => track.stop());
-    setStream(null);
-  };
-
   const addCapturedPage = async (raw: File) => {
     setBusy(true);
     setBusyLabel("Sharpening the page…");
@@ -1557,13 +1445,10 @@ function AddDocumentModal({
       setError(err instanceof Error ? err.message : "Could not keep that scan.");
     } finally {
       setBusy(false);
-      setScanning(false);
-      scanningRef.current = false;
     }
   };
 
   const openPage = async (file: File) => {
-    stopCamera();
     setBusy(true);
     setBusyLabel("Finding the page edges…");
     try {
@@ -1572,28 +1457,6 @@ function AddDocumentModal({
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not use that photo.");
       setBusy(false);
-    }
-  };
-
-  const capturePhoto = async () => {
-    const video = videoRef.current;
-    if (!video || scanningRef.current) return;
-    if (!cornersRef.current) {
-      setError("No page found yet. Lay the letter flat on a contrasting surface and fit it inside the frame.");
-      return;
-    }
-    scanningRef.current = true;
-    setScanning(true);
-    setError(null);
-    try {
-      const file = await flattenCapturedFrame(video, cornersRef.current);
-      await new Promise((resolve) => window.setTimeout(resolve, 650));
-      stopCamera();
-      await addCapturedPage(file);
-    } catch (err) {
-      scanningRef.current = false;
-      setScanning(false);
-      setError(err instanceof Error ? err.message : "Could not see the page edges. Try again.");
     }
   };
 
@@ -1606,7 +1469,6 @@ function AddDocumentModal({
       setError("Select at least one scan to save.");
       return;
     }
-    stopCamera();
     setBusy(true);
     setBusyLabel(files.length > 1 ? "Joining pages and reading them…" : "Reading the page with on-device OCR…");
     try {
@@ -1646,17 +1508,6 @@ function AddDocumentModal({
     }
   };
 
-  const startCamera = async () => {
-    try {
-      const media = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } },
-      });
-      setStream(media);
-    } catch {
-      setError("Camera permission was declined. You can still upload a photo instead.");
-    }
-  };
-
   const submit = async (makeCurrent: boolean) => {
     if (!draft) return;
     await onSave(draft, makeCurrent);
@@ -1673,9 +1524,24 @@ function AddDocumentModal({
     void submit(true);
   };
 
+  if (step === "camera") {
+    return (
+      <ScannerScreen
+        pageCount={pages.length}
+        onClose={() => {
+          if (pages.length > 0) setStep("pages");
+          else if (startAt === "camera") onClose();
+          else setStep("choose");
+        }}
+        onCaptured={addCapturedPage}
+        onPickFromLibrary={(file) => void openPage(file)}
+      />
+    );
+  }
+
   return (
-    <div className={`modal-back ${step === "camera" ? "scan-open" : ""}`} onClick={onClose}>
-      <div className={`modal ${step === "camera" ? "scan-screen" : ""}`} onClick={(e) => e.stopPropagation()}>
+    <div className="modal-back" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
         {step === "choose" && (
           <>
             <h2>Add a document</h2>
@@ -1721,59 +1587,6 @@ function AddDocumentModal({
                 <strong>Reference a location</strong>
                 <span>Don’t duplicate the file. Index where the current copy already is.</span>
               </button>
-            </div>
-          </>
-        )}
-
-        {step === "camera" && (
-          <>
-            <h2>Scan with your phone</h2>
-            <p className="meta">
-              Lay one page flat on a contrasting surface. Line it up with the frame. The border turns green when
-              the page is ready — then tap Capture. The table stays out of the saved scan.
-            </p>
-            {pages.length > 0 && (
-              <div className="page-thumbs">
-                {pages.map((page, index) => (
-                  <img key={page.id} src={page.url} alt={`Page ${index + 1}`} />
-                ))}
-                <span>{pages.length} page{pages.length === 1 ? "" : "s"} captured</span>
-              </div>
-            )}
-            <div className={`camera-wrap ${scanning ? "scanning" : ""} ${scanLock ? "locked" : ""}`}>
-              <video ref={videoRef} id="soa-camera" autoPlay playsInline muted />
-              <canvas ref={overlayRef} className="scan-overlay" />
-              <p className={`scan-hint ${scanLock ? "ok" : ""}`}>{scanHint}</p>
-              {scanning && (
-                <>
-                  <div className="scan-beam" />
-                  <p className="scan-label">Scanning…</p>
-                </>
-              )}
-            </div>
-            <div className="row" style={{ marginTop: 12 }}>
-              <button className="secondary" onClick={() => void startCamera()} disabled={scanning}>
-                Allow camera
-              </button>
-              <button
-                className={`primary ${scanLock ? "ready" : ""}`}
-                onClick={() => void capturePhoto()}
-                disabled={scanning || !hasPage}
-              >
-                {scanning ? "Scanning…" : scanLock ? "Capture" : hasPage ? "Capture" : "Hold over the page"}
-              </button>
-              <label className="secondary" style={{ display: "inline-flex" }}>
-                Use the phone camera roll
-                <input
-                  type="file"
-                  accept="image/*"
-                  hidden
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (file) void openPage(file);
-                  }}
-                />
-              </label>
             </div>
           </>
         )}
