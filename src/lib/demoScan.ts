@@ -1,6 +1,7 @@
 import {
   DEMO_DESK_H,
   DEMO_DESK_W,
+  DEMO_LETTER_ANGLE,
   DEMO_LETTER_AREA,
   DEMO_LETTER_CENTER,
   DEMO_START_POSE,
@@ -8,6 +9,8 @@ import {
 } from "./demoLetter";
 import { analyzeQuad, orderQuad, type Point, type Quad } from "../scanner/geometry";
 import type { Guidance } from "../scanner/guidance";
+
+export type OverlayStage = "search" | "found" | "ready";
 
 export type DemoPose = {
   cx: number;
@@ -69,16 +72,20 @@ export function visibleDeskSize(pose: DemoPose, screenW: number, screenH: number
   return { viewW, viewH };
 }
 
-export function deskImageStyle(pose: DemoPose, screenW: number, screenH: number) {
+export function deskImageStyle(pose: DemoPose, screenW: number, screenH: number, straighten = 0) {
   const { viewW, viewH } = visibleDeskSize(pose, screenW, screenH);
   const scaleX = screenW / viewW;
   const scaleY = screenH / viewH;
+  const originX = pose.cx * scaleX;
+  const originY = pose.cy * scaleY;
+  const degrees = (-DEMO_LETTER_ANGLE * straighten * 180) / Math.PI;
   return {
     width: `${DEMO_DESK_W * scaleX}px`,
     height: `${DEMO_DESK_H * scaleY}px`,
     left: `${-(pose.cx - viewW / 2) * scaleX}px`,
     top: `${-(pose.cy - viewH / 2) * scaleY}px`,
-    transform: "none",
+    transformOrigin: `${originX}px ${originY}px`,
+    transform: `rotate(${degrees}deg)`,
   };
 }
 
@@ -87,10 +94,16 @@ export function projectLetterQuad(
   pose: DemoPose,
   screenW: number,
   screenH: number,
+  straighten = 0,
 ): Quad {
   const { viewW, viewH } = visibleDeskSize(pose, screenW, screenH);
   const left = pose.cx - viewW / 2;
   const top = pose.cy - viewH / 2;
+  const angle = -DEMO_LETTER_ANGLE * straighten;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const midX = screenW / 2;
+  const midY = screenH / 2;
   const points = corners.map((point) => {
     let x = ((point.x - left) / viewW) * screenW;
     let y = ((point.y - top) / viewH) * screenH;
@@ -98,7 +111,9 @@ export function projectLetterQuad(
     const ny = y / screenH - 0.5;
     x += ny * pose.tiltX * screenW;
     y += nx * pose.tiltY * screenH;
-    return { x, y };
+    const dx = x - midX;
+    const dy = y - midY;
+    return { x: midX + dx * cos - dy * sin, y: midY + dx * sin + dy * cos };
   });
   return orderQuad(points);
 }
@@ -110,7 +125,16 @@ function cornersOnScreen(quad: Quad, width: number, height: number) {
   ).length;
 }
 
-export function demoGuidance(quad: Quad, width: number, height: number, held: boolean): Guidance {
+export function demoGuidance(
+  quad: Quad,
+  width: number,
+  height: number,
+  stage: OverlayStage,
+  straighten: number,
+): Guidance {
+  if (stage === "search") {
+    return { message: "Find the document", ready: false, reason: "search" };
+  }
   const seen = cornersOnScreen(quad, width, height);
   if (seen < 2) {
     return { message: "Find the document", ready: false, reason: "no-document" };
@@ -128,7 +152,10 @@ export function demoGuidance(quad: Quad, width: number, height: number, held: bo
   if (Math.abs(metrics.centreOffsetY) > 0.3) {
     return { message: metrics.centreOffsetY < 0 ? "Move up" : "Move down", ready: false, reason: "off-centre" };
   }
-  if (!held) {
+  if (straighten < 0.82) {
+    return { message: "Hold phone parallel", ready: false, reason: "perspective" };
+  }
+  if (stage !== "ready") {
     return { message: "Hold steady", ready: false, reason: "motion" };
   }
   return { message: "Ready", ready: true, reason: "ready" };
@@ -168,8 +195,7 @@ export function drawDemoOverlay(
   width: number,
   height: number,
   quad: Quad | null,
-  locked: boolean,
-  clipped: boolean,
+  stage: OverlayStage,
 ) {
   const dpr = window.devicePixelRatio || 1;
   if (canvas.width !== Math.round(width * dpr) || canvas.height !== Math.round(height * dpr)) {
@@ -190,8 +216,10 @@ export function drawDemoOverlay(
     boxW = width * 0.82;
     boxH = boxW / ratio;
   }
+  const ready = stage === "ready";
+  const searching = stage === "search";
   ctx.save();
-  ctx.strokeStyle = locked ? "rgba(47, 122, 88, 0.35)" : "rgba(247, 241, 228, 0.5)";
+  ctx.strokeStyle = ready ? "rgba(47, 122, 88, 0.35)" : "rgba(247, 241, 228, 0.5)";
   ctx.setLineDash([7, 7]);
   ctx.lineWidth = 2;
   ctx.strokeRect((width - boxW) / 2, (height - boxH) / 2, boxW, boxH);
@@ -200,7 +228,7 @@ export function drawDemoOverlay(
   if (!quad) return;
 
   ctx.save();
-  ctx.fillStyle = locked ? "rgba(20, 40, 30, 0.28)" : "rgba(12, 10, 8, 0.32)";
+  ctx.fillStyle = ready ? "rgba(20, 40, 30, 0.28)" : "rgba(12, 10, 8, 0.32)";
   ctx.beginPath();
   ctx.rect(0, 0, width, height);
   ctx.moveTo(quad.topLeft.x, quad.topLeft.y);
@@ -211,10 +239,10 @@ export function drawDemoOverlay(
   ctx.fill("evenodd");
   ctx.restore();
 
-  ctx.strokeStyle = locked ? "#3d9a68" : clipped ? "#d4b36a" : "#c4a35a";
-  ctx.lineWidth = locked ? 4 : 3.5;
+  ctx.strokeStyle = ready ? "#3d9a68" : searching ? "#f7f1e4" : "#c4a35a";
+  ctx.lineWidth = ready ? 4 : 3.5;
   ctx.lineJoin = "round";
-  ctx.setLineDash(clipped ? [10, 8] : []);
+  ctx.setLineDash(searching ? [10, 8] : []);
   ctx.beginPath();
   ctx.moveTo(quad.topLeft.x, quad.topLeft.y);
   ctx.lineTo(quad.topRight.x, quad.topRight.y);

@@ -83,7 +83,8 @@ export const DEMO_DESK_W = 2000;
 export const DEMO_DESK_H = 2660;
 const LETTER_W = 760;
 const LETTER_H = 1076;
-const LETTER_ANGLE = -0.065;
+export const DEMO_LETTER_ANGLE = -0.18;
+const LETTER_ANGLE = DEMO_LETTER_ANGLE;
 const LETTER_CX = DEMO_DESK_W / 2 + 18;
 const LETTER_CY = DEMO_DESK_H / 2 + 10;
 
