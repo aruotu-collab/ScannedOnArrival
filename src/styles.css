@@ -706,11 +706,14 @@ button {
 }
 
 .doc-type-card {
+  display: flex;
+  flex-direction: column;
   background: var(--cream);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   overflow: hidden;
+  scroll-margin-top: 16px;
 }
 
 .doc-type-card.open {
@@ -741,6 +744,7 @@ button {
   scroll-snap-type: x mandatory;
   padding: 0 16px 16px;
   -webkit-overflow-scrolling: touch;
+  width: 100%;
 }
 
 .doc-slide {

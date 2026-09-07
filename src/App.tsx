@@ -11,7 +11,7 @@ import type {
 } from "./types";
 import { CATEGORIES, DOCUMENT_TYPES, suggestedPath, typeById } from "./data/taxonomy";
 import { SAMPLE_DOCUMENTS, SAMPLE_INBOX } from "./data/sample";
-import { computeStatus, freshnessLabel, locationShort, providerLabel, storageVerb } from "./data/status";
+import { computeStatus, freshnessLabel, providerLabel, storageVerb } from "./data/status";
 import { extractPdfText, isImage, isPdf } from "./lib/pdf";
 import { extractImageText } from "./lib/ocr";
 import { consumeSharedFile, isDesktopLayout, isIos, isStandalone } from "./lib/pwa";
@@ -492,16 +492,20 @@ export default function App() {
             <ReadyView
               documents={documents}
               attention={attention}
-              onOpen={(id) => {
-                const doc = documents.find((item) => item.id === id);
-                setSelectedId(id);
-                setExpandedTypeId(doc?.typeId ?? null);
-                setView("documents");
+              expandedTypeId={expandedTypeId}
+              onExpand={(typeId, documentId) => {
+                setExpandedTypeId(typeId);
+                if (documentId) setSelectedId(documentId);
               }}
               onAdd={() => {
                 setIncomingFile(null);
                 setAddStart("choose");
                 setAddOpen(true);
+              }}
+              onDeleted={async (id) => {
+                await deleteDocument(id);
+                setDocuments(documents.filter((d) => d.id !== id));
+                if (selectedId === id) setSelectedId(null);
               }}
             />
           )}
@@ -634,13 +638,17 @@ export default function App() {
 function ReadyView({
   documents,
   attention,
-  onOpen,
+  expandedTypeId,
+  onExpand,
   onAdd,
+  onDeleted,
 }: {
   documents: DocumentRecord[];
   attention: AttentionItem[];
-  onOpen: (id: string) => void;
+  expandedTypeId: string | null;
+  onExpand: (typeId: string | null, documentId?: string) => void;
   onAdd: () => void;
+  onDeleted: (id: string) => void;
 }) {
   const current = documents.filter((d) => d.isCurrent);
   const rows = DOCUMENT_TYPES.filter((t) => t.id !== "other").map((type) => {
@@ -681,7 +689,14 @@ function ReadyView({
           <strong>Needs attention</strong>
           <span>These copies are in your index but are outdated or about to expire.</span>
           {attention.map((item) => (
-            <button key={item.key} className="attention-row" onClick={() => onOpen(item.documentId)}>
+            <button
+              key={item.key}
+              className="attention-row"
+              onClick={() => {
+                const doc = documents.find((row) => row.id === item.documentId);
+                onExpand(doc?.typeId ?? null, item.documentId);
+              }}
+            >
               <div>
                 <b>{item.typeLabel}</b>
                 <small>
@@ -693,69 +708,45 @@ function ReadyView({
           ))}
         </div>
       )}
-      <div className="grid ready-grid">
-        {rows.map(({ type, doc, status }) => (
-          <button key={type.id} className="card" onClick={() => (doc ? onOpen(doc.id) : onAdd())}>
-            <div className="kicker">{CATEGORIES.find((c) => c.id === type.categoryId)?.label}</div>
-            <h3>{type.label}</h3>
-            {doc ? (
-              <>
-                <p className="meta">
-                  {doc.title}
-                  <br />
-                  {freshnessLabel(doc)} · {locationShort(doc)}
-                </p>
-                <span className={`badge ${status}`}>
-                  {status === "current" ? "Current" : status === "expiring" ? "Expiring" : "Outdated"}
-                </span>
-              </>
-            ) : (
-              <>
-                <p className="meta">No copy in your index yet. Scan with your phone, upload a PDF, or reference where it already lives.</p>
-                <span className="badge missing">Missing</span>
-              </>
-            )}
-          </button>
-        ))}
-      </div>
+      <TypeAccordion
+        types={DOCUMENT_TYPES.filter((type) => type.id !== "other")}
+        documents={documents}
+        expandedTypeId={expandedTypeId}
+        includeEmpty
+        onExpand={onExpand}
+        onAdd={onAdd}
+        onDeleted={onDeleted}
+      />
     </>
   );
 }
 
-function DocumentsView({
+function TypeAccordion({
+  types,
   documents,
-  allDocuments,
   expandedTypeId,
+  includeEmpty,
   onExpand,
+  onAdd,
   onDeleted,
 }: {
+  types: typeof DOCUMENT_TYPES;
   documents: DocumentRecord[];
-  allDocuments: DocumentRecord[];
   expandedTypeId: string | null;
+  includeEmpty?: boolean;
   onExpand: (typeId: string | null, documentId?: string) => void;
+  onAdd?: () => void;
   onDeleted: (id: string) => void;
 }) {
-  const groups = DOCUMENT_TYPES.filter((type) => type.id !== "other" || allDocuments.some((doc) => doc.typeId === "other"))
+  const groups = types
     .map((type) => {
-      const copies = allDocuments
+      const copies = documents
         .filter((doc) => doc.typeId === type.id)
         .sort((a, b) => Number(b.isCurrent) - Number(a.isCurrent) || b.createdAt.localeCompare(a.createdAt));
-      const current = documents.find((doc) => doc.typeId === type.id) ?? copies.find((doc) => doc.isCurrent) ?? copies[0];
+      const current = copies.find((doc) => doc.isCurrent) ?? copies[0];
       return { type, copies, current };
     })
-    .filter((group) => group.copies.length);
-
-  if (!groups.length) {
-    return (
-      <div className="card empty">
-        <h2>Nothing indexed yet</h2>
-        <p>
-          Scan a letter with your phone in this browser, upload a PDF, or reference a file you already keep in
-          iCloud, Drive or Downloads.
-        </p>
-      </div>
-    );
-  }
+    .filter((group) => includeEmpty || group.copies.length);
 
   return (
     <div className="doc-stack">
@@ -763,23 +754,36 @@ function DocumentsView({
         const open = expandedTypeId === type.id;
         const status = current ? computeStatus(current) : "missing";
         return (
-          <section key={type.id} className={`doc-type-card ${open ? "open" : ""}`}>
+          <section
+            key={type.id}
+            id={`type-${type.id}`}
+            className={`doc-type-card ${open ? "open" : ""}`}
+          >
             <button
               className="doc-type-head"
-              onClick={() => onExpand(open ? null : type.id, current?.id)}
+              onClick={() => {
+                if (!current && onAdd) {
+                  onAdd();
+                  return;
+                }
+                onExpand(open ? null : type.id, current?.id);
+                window.requestAnimationFrame(() => {
+                  document.getElementById(`type-${type.id}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+                });
+              }}
             >
               <div>
                 <div className="kicker">{CATEGORIES.find((category) => category.id === type.categoryId)?.label}</div>
                 <h3>{type.label}</h3>
                 <p className="meta">
-                  {current ? `${current.title} · ${freshnessLabel(current)}` : "No copy yet"}
+                  {current ? `${current.title} · ${freshnessLabel(current)}` : "No copy in your index yet. Tap to scan or add."}
                 </p>
               </div>
               <span className={`badge ${status}`}>
-                {status === "current" ? "Current" : status === "expiring" ? "Expiring" : status}
+                {status === "current" ? "Current" : status === "expiring" ? "Expiring" : status === "missing" ? "Missing" : status}
               </span>
             </button>
-            {open && (
+            {open && current && (
               <div className="doc-rail" aria-label={`${type.label} copies`}>
                 {copies.map((doc) => (
                   <div key={doc.id} className="doc-slide">
@@ -797,6 +801,42 @@ function DocumentsView({
         );
       })}
     </div>
+  );
+}
+
+function DocumentsView({
+  documents,
+  allDocuments,
+  expandedTypeId,
+  onExpand,
+  onDeleted,
+}: {
+  documents: DocumentRecord[];
+  allDocuments: DocumentRecord[];
+  expandedTypeId: string | null;
+  onExpand: (typeId: string | null, documentId?: string) => void;
+  onDeleted: (id: string) => void;
+}) {
+  if (!documents.length) {
+    return (
+      <div className="card empty">
+        <h2>Nothing indexed yet</h2>
+        <p>
+          Scan a letter with your phone in this browser, upload a PDF, or reference a file you already keep in
+          iCloud, Drive or Downloads.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <TypeAccordion
+      types={DOCUMENT_TYPES.filter((type) => type.id !== "other" || allDocuments.some((doc) => doc.typeId === "other"))}
+      documents={allDocuments}
+      expandedTypeId={expandedTypeId}
+      onExpand={onExpand}
+      onDeleted={onDeleted}
+    />
   );
 }
 
@@ -870,7 +910,9 @@ function DocumentDetail({
         </>
       )}
       {compact && previous.length > 0 && (
-        <p className="meta">Swipe for {previous.length} other cop{previous.length === 1 ? "y" : "ies"}.</p>
+        <p className="meta">
+          Swipe for {previous.length} other {previous.length === 1 ? "copy" : "copies"}.
+        </p>
       )}
       <div className="row" style={{ marginTop: 16 }}>
         <button className="danger" onClick={onDeleted}>
