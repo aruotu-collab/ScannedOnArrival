@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   AddDraft,
   AppSettings,
@@ -14,6 +14,8 @@ import { classifyDocument } from "./data/classify";
 import { SAMPLE_DOCUMENTS, SAMPLE_INBOX } from "./data/sample";
 import { computeStatus, freshnessLabel, locationShort, providerLabel, storageVerb } from "./data/status";
 import { extractPdfText, isImage, isPdf } from "./lib/pdf";
+import { extractImageText } from "./lib/ocr";
+import { consumeSharedFile, isDesktopLayout, isIos, isStandalone } from "./lib/pwa";
 import {
   clearAllData,
   deleteDocument,
@@ -61,6 +63,107 @@ function ProductBadge({ tone = "light" }: { tone?: "light" | "dark" }) {
   );
 }
 
+const INSTALL_DISMISS_KEY = "soa-install-dismissed";
+
+function InstallBanner({
+  prompt,
+  onInstalled,
+}: {
+  prompt: BeforeInstallPromptEvent | null;
+  onInstalled: () => void;
+}) {
+  const [dismissed, setDismissed] = useState(() => {
+    try {
+      return localStorage.getItem(INSTALL_DISMISS_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+
+  if (dismissed || isStandalone()) return null;
+  const ios = isIos();
+  if (!prompt && !ios) return null;
+
+  const dismiss = () => {
+    try {
+      localStorage.setItem(INSTALL_DISMISS_KEY, "1");
+    } catch {
+      /* ignore quota */
+    }
+    setDismissed(true);
+  };
+
+  return (
+    <div className="install-banner">
+      <strong>Add to Home Screen</strong>
+      <span>
+        {ios
+          ? "In Safari, tap Share, then Add to Home Screen. You get a camera-ready icon without the App Store."
+          : "Install this site like an app. Then you can share PDFs from Mail or Files straight in."}
+      </span>
+      <div className="row">
+        {prompt && (
+          <button
+            className="primary"
+            onClick={() => {
+              void (async () => {
+                await prompt.prompt();
+                const choice = await prompt.userChoice;
+                if (choice.outcome === "accepted") onInstalled();
+              })();
+            }}
+          >
+            Add to Home Screen
+          </button>
+        )}
+        <button className="secondary" onClick={dismiss}>
+          Not now
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PhoneHandoff() {
+  const [dataUrl, setDataUrl] = useState<string | null>(null);
+  const [visible, setVisible] = useState(() => isDesktopLayout());
+
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 861px)");
+    const sync = () => setVisible(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
+
+  useEffect(() => {
+    if (!visible) return;
+    const url = `${window.location.origin}/?scan=1`;
+    void import("qrcode").then((mod) => {
+      const QRCode = mod.default;
+      return QRCode.toDataURL(url, {
+        width: 180,
+        margin: 1,
+        color: { dark: "#1B3A2F", light: "#F3EEE4" },
+      }).then(setDataUrl);
+    });
+  }, [visible]);
+
+  if (!visible) return null;
+
+  return (
+    <div className="qr-strip">
+      <div>
+        <strong>Scan from your phone</strong>
+        <span>
+          Point your phone camera at this code. It opens this same site, ready to photograph a letter.
+        </span>
+      </div>
+      {dataUrl ? <img src={dataUrl} alt="QR code that opens the phone scanner" width={120} height={120} /> : null}
+    </div>
+  );
+}
+
 function defaultLocation(method: SourceKind, storageKind: "stored" | "referenced"): string {
   if (storageKind === "stored") {
     return method === "camera" ? "Stored locally in ScannedOnArrival" : "Stored locally in ScannedOnArrival";
@@ -78,6 +181,9 @@ export default function App() {
   const [view, setView] = useState<ViewId>("ready");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
+  const [addStart, setAddStart] = useState<"choose" | "camera">("choose");
+  const [incomingFile, setIncomingFile] = useState<File | null>(null);
+  const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
   useEffect(() => {
@@ -110,6 +216,55 @@ export default function App() {
     const timer = window.setTimeout(() => setToast(null), 2800);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  useEffect(() => {
+    const onPrompt = (event: Event) => {
+      event.preventDefault();
+      setInstallPrompt(event as BeforeInstallPromptEvent);
+    };
+    window.addEventListener("beforeinstallprompt", onPrompt);
+    return () => window.removeEventListener("beforeinstallprompt", onPrompt);
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    const params = new URLSearchParams(window.location.search);
+    const openScan = params.get("scan") === "1";
+    const shared = params.get("shared") === "1";
+
+    const consumeLaunch = async () => {
+      if (shared) {
+        const file = await consumeSharedFile();
+        if (file) {
+          setIncomingFile(file);
+          setAddStart("choose");
+          setAddOpen(true);
+        }
+      } else if (openScan) {
+        setAddStart("camera");
+        setAddOpen(true);
+      }
+      if (openScan || shared) {
+        const url = new URL(window.location.href);
+        url.searchParams.delete("scan");
+        url.searchParams.delete("shared");
+        window.history.replaceState({}, "", `${url.pathname}${url.search}`);
+      }
+    };
+
+    void consumeLaunch();
+
+    if (window.launchQueue) {
+      window.launchQueue.setConsumer((params) => {
+        void (async () => {
+          const file = await params.files[0]?.getFile();
+          if (!file) return;
+          setIncomingFile(file);
+          setAddOpen(true);
+        })();
+      });
+    }
+  }, [hydrated]);
 
   const persistSettings = async (next: AppSettings) => {
     setSettings(next);
@@ -171,6 +326,8 @@ export default function App() {
       await saveFileBlob({ id, documentId: id, blob: draft.file });
     }
     setAddOpen(false);
+    setIncomingFile(null);
+    setAddStart("choose");
     setSelectedId(id);
     setView("documents");
     setToast(`${record.title} added`);
@@ -218,9 +375,10 @@ export default function App() {
           <p className="kicker">Document readiness</p>
           <h1>ScannedOnArrival</h1>
           <p>
-            This is a web app — open it in Safari or Chrome, nothing to install. When we say scan, we mean
-            point your phone at the paper, in this browser tab.
-          </p>
+          This is a web app — open it in Safari or Chrome. It is not an App Store app; you can add it to
+          your Home Screen if you want. When we say scan, we mean point your phone at the paper, in this
+          browser tab.
+        </p>
           <div className="fact-row">
             <div className="fact">
               <strong>Scan = your phone</strong>
@@ -299,12 +457,23 @@ export default function App() {
               {view === "settings" && "Keep the privacy story clear. Local by default, convenience only if you choose it."}
             </p>
           </div>
-          <button className="primary" onClick={() => setAddOpen(true)}>
+          <button
+            className="primary"
+            onClick={() => {
+              setIncomingFile(null);
+              setAddStart("choose");
+              setAddOpen(true);
+            }}
+          >
             Scan or add
           </button>
         </header>
 
         <div className="content">
+          <InstallBanner
+            prompt={installPrompt}
+            onInstalled={() => setInstallPrompt(null)}
+          />
           {view === "ready" && (
             <ReadyView
               documents={documents}
@@ -312,7 +481,11 @@ export default function App() {
                 setSelectedId(id);
                 setView("documents");
               }}
-              onAdd={() => setAddOpen(true)}
+              onAdd={() => {
+                setIncomingFile(null);
+                setAddStart("choose");
+                setAddOpen(true);
+              }}
             />
           )}
           {view === "documents" && (
@@ -371,6 +544,8 @@ export default function App() {
           {view === "settings" && (
             <SettingsView
               settings={settings}
+              installPrompt={installPrompt}
+              onInstalled={() => setInstallPrompt(null)}
               onSettings={persistSettings}
               onReset={async () => {
                 await clearAllData();
@@ -395,7 +570,13 @@ export default function App() {
       {addOpen && (
         <AddDocumentModal
           documents={documents}
-          onClose={() => setAddOpen(false)}
+          startAt={addStart}
+          incomingFile={incomingFile}
+          onClose={() => {
+            setAddOpen(false);
+            setIncomingFile(null);
+            setAddStart("choose");
+          }}
           onSave={addDocument}
         />
       )}
@@ -428,10 +609,11 @@ function ReadyView({
       <div className="how-strip">
         <strong>A phone scanner in your browser.</strong>
         <span>
-          Open this site in Safari or Chrome — no app to install. Scan means pointing your phone at the paper,
-          in this tab. On a computer, upload a PDF or open this same page on your phone to scan.
+          Open this site in Safari or Chrome — not an App Store app. Scan means pointing your phone at the paper,
+          in this tab. On a computer, upload a PDF or scan the code below with your phone.
         </span>
       </div>
+      <PhoneHandoff />
       <div className="summary-strip">
         <div className="stat">
           <b>{ready}</b>
@@ -827,22 +1009,61 @@ function InboxView({
 
 function SettingsView({
   settings,
+  installPrompt,
+  onInstalled,
   onSettings,
   onReset,
 }: {
   settings: AppSettings;
+  installPrompt: BeforeInstallPromptEvent | null;
+  onInstalled: () => void;
   onSettings: (s: AppSettings) => Promise<void>;
   onReset: () => Promise<void>;
 }) {
+  const standalone = isStandalone();
+  const ios = isIos();
+
   return (
     <div className="grid">
       <div className="card">
         <h2>A web app in your browser</h2>
         <p className="meta">
-          ScannedOnArrival runs in Safari, Chrome or Edge. There is nothing to install from an app store.
-          When we say scan, we mean your phone’s camera in this page — not a hardware scanner, and not a
-          separate mobile app. On a computer you can still upload PDFs and keep the index; to photograph
-          paper, open this same site on your phone.
+          ScannedOnArrival runs in Safari, Chrome or Edge. It is not an App Store app. When we say scan, we
+          mean your phone’s camera in this page — not a hardware scanner. On a computer you can still upload
+          PDFs; to photograph paper, open this same site on your phone, or scan the QR on Ready.
+        </p>
+      </div>
+      <div className="card">
+        <h2>Add to Home Screen</h2>
+        <p className="meta">
+          {standalone
+            ? "This site is already running from your Home Screen."
+            : ios
+              ? "In Safari, tap Share, then Add to Home Screen. You get a camera-ready icon without the App Store."
+              : "Install this site like an app. After that, Android Chrome can share PDFs from Mail or Files into it."}
+        </p>
+        {installPrompt && !standalone && (
+          <button
+            className="primary"
+            style={{ marginTop: 12 }}
+            onClick={() => {
+              void (async () => {
+                await installPrompt.prompt();
+                const choice = await installPrompt.userChoice;
+                if (choice.outcome === "accepted") onInstalled();
+              })();
+            }}
+          >
+            Add to Home Screen
+          </button>
+        )}
+      </div>
+      <div className="card">
+        <h2>Share from Mail or Files</h2>
+        <p className="meta">
+          On Android, install this site first, then use Share and pick ScannedOnArrival. On iPhone, Share Target
+          is not available — open this page and use Add from Files or the camera roll instead. Classification
+          stays on this device; image scans use on-device OCR.
         </p>
       </div>
       <div className="card">
@@ -875,25 +1096,60 @@ function SettingsView({
 
 function AddDocumentModal({
   documents,
+  startAt,
+  incomingFile,
   onClose,
   onSave,
 }: {
   documents: DocumentRecord[];
+  startAt: "choose" | "camera";
+  incomingFile: File | null;
   onClose: () => void;
   onSave: (draft: AddDraft, makeCurrent: boolean) => Promise<void>;
 }) {
-  const [step, setStep] = useState<"choose" | "camera" | "form" | "replace">("choose");
+  const [step, setStep] = useState<"choose" | "camera" | "form" | "replace">(incomingFile ? "choose" : startAt);
   const [busy, setBusy] = useState(false);
+  const [busyLabel, setBusyLabel] = useState("Reading the document locally…");
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState<AddDraft | null>(null);
   const [existing, setExisting] = useState<DocumentRecord | null>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const ingested = useRef(false);
 
   useEffect(() => {
     return () => {
       stream?.getTracks().forEach((track) => track.stop());
     };
   }, [stream]);
+
+  useEffect(() => {
+    if (videoRef.current && stream) {
+      videoRef.current.srcObject = stream;
+    }
+  }, [stream]);
+
+  useEffect(() => {
+    if (step !== "camera") return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const media = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: "environment" } },
+        });
+        if (cancelled) {
+          media.getTracks().forEach((track) => track.stop());
+          return;
+        }
+        setStream(media);
+      } catch {
+        if (!cancelled) setError("Camera permission was declined. You can still upload a photo instead.");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [step]);
 
   const beginMethod = (method: SourceKind) => {
     const storageKind = method === "reference" ? "referenced" : "stored";
@@ -930,13 +1186,20 @@ function AddDocumentModal({
 
   const handleFile = async (file: File, method: SourceKind, storageKind: AddDraft["storageKind"]) => {
     setBusy(true);
+    setBusyLabel(isImage(file) ? "Reading the page with on-device OCR…" : "Reading the document locally…");
     setError(null);
     try {
-      let classified = classifyDocument({ fileName: file.name });
+      let text = "";
       if (isPdf(file)) {
-        const text = await extractPdfText(file);
-        classified = classifyDocument({ text, fileName: file.name });
+        text = await extractPdfText(file);
+      } else if (isImage(file)) {
+        try {
+          text = await extractImageText(file);
+        } catch {
+          text = "";
+        }
       }
+      const classified = classifyDocument({ text, fileName: file.name });
       const next = applyClassification({
         method,
         file,
@@ -966,8 +1229,15 @@ function AddDocumentModal({
     }
   };
 
+  useEffect(() => {
+    if (!incomingFile || ingested.current) return;
+    ingested.current = true;
+    const method: SourceKind = isImage(incomingFile) ? "camera" : "upload";
+    void handleFile(incomingFile, method, "stored");
+  }, [incomingFile]);
+
   const capturePhoto = async () => {
-    const video = document.getElementById("soa-camera") as HTMLVideoElement | null;
+    const video = videoRef.current;
     if (!video) return;
     const canvas = document.createElement("canvas");
     canvas.width = video.videoWidth || 1280;
@@ -985,10 +1255,10 @@ function AddDocumentModal({
 
   const startCamera = async () => {
     try {
-      const media = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+      const media = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: "environment" } },
+      });
       setStream(media);
-      const video = document.getElementById("soa-camera") as HTMLVideoElement | null;
-      if (video) video.srcObject = media;
     } catch {
       setError("Camera permission was declined. You can still upload a photo instead.");
     }
@@ -1070,7 +1340,7 @@ function AddDocumentModal({
               webcam — for a letter, open this same page on your phone instead.
             </p>
             <div className="camera-wrap">
-              <video id="soa-camera" autoPlay playsInline />
+              <video ref={videoRef} id="soa-camera" autoPlay playsInline muted />
             </div>
             <div className="row" style={{ marginTop: 12 }}>
               <button className="secondary" onClick={startCamera}>
@@ -1217,7 +1487,7 @@ function AddDocumentModal({
           </>
         )}
 
-        {busy && <p className="meta">Reading the document locally…</p>}
+        {busy && <p className="meta">{busyLabel}</p>}
         {error && <div className="notice warn">{error}</div>}
       </div>
     </div>

@@ -128,6 +128,51 @@ button {
   line-height: 1.45;
 }
 
+.install-banner,
+.qr-strip {
+  background: var(--cream);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+  display: flex;
+  gap: 16px;
+}
+
+.install-banner {
+  flex-direction: column;
+  gap: 8px;
+}
+
+.install-banner strong,
+.qr-strip strong {
+  display: block;
+  font-size: 0.95rem;
+}
+
+.install-banner span,
+.qr-strip span {
+  color: var(--ink-soft);
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+
+.qr-strip {
+  align-items: center;
+  justify-content: space-between;
+}
+
+.qr-strip img {
+  width: 120px;
+  height: 120px;
+  border-radius: 10px;
+  flex-shrink: 0;
+}
+
+.install-banner .row {
+  margin-top: 4px;
+}
+
 .fact-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -675,6 +720,10 @@ button {
   .fact-row,
   .detail {
     grid-template-columns: 1fr;
+  }
+
+  .qr-strip {
+    display: none;
   }
 
   .topbar,
