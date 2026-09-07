@@ -477,7 +477,7 @@ export default function App() {
             className="primary"
             onClick={() => {
               setIncomingFile(null);
-              setAddStart("choose");
+              setAddStart(isDesktopLayout() ? "choose" : "camera");
               setAddOpen(true);
             }}
           >
@@ -501,7 +501,7 @@ export default function App() {
               }}
               onAdd={() => {
                 setIncomingFile(null);
-                setAddStart("choose");
+                setAddStart(isDesktopLayout() ? "choose" : "camera");
                 setAddOpen(true);
               }}
               onDeleted={async (id) => {
