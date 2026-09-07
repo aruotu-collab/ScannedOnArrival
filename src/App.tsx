@@ -654,7 +654,7 @@ export default function App() {
             <p>
               {view === "ready" && "What’s current, missing, or overdue — organised by document type, not files."}
               {view === "demo" && "Try a scan with a sample letter, then see where it lands."}
-              {view === "documents" && "Tap a document type to open it here. Swipe left or right for other copies."}
+              {view === "documents" && "Tap a category, then a type. Swipe the tabs for other types; swipe the page for other copies."}
               {view === "tree" && "A filing-cabinet view. The folders are logical; the files can live anywhere."}
               {view === "inbox" && "Letterbox or inbox: both are ways documents arrive. Email stays optional."}
               {view === "settings" && "Keep the privacy story clear. Local by default, convenience only if you choose it."}
@@ -704,6 +704,7 @@ export default function App() {
                 setExpandedTypeId(typeId);
                 if (documentId) setSelectedId(documentId);
               }}
+              onAdd={() => openAdd("choose")}
               onScan={(typeId) => openAdd("camera", typeId)}
               onDeleted={async (id) => {
                 await deleteDocument(id);
@@ -1053,6 +1054,97 @@ function ReadyView({
   );
 }
 
+function statusBadgeText(status: "current" | "outdated" | "expiring" | "missing") {
+  if (status === "current") return "Current";
+  if (status === "expiring") return "Expiring";
+  if (status === "missing") return "Missing";
+  return "Outdated";
+}
+
+function copiesForType(documents: DocumentRecord[], typeId: string) {
+  return documents
+    .filter((doc) => doc.typeId === typeId)
+    .sort((a, b) => Number(b.isCurrent) - Number(a.isCurrent) || b.createdAt.localeCompare(a.createdAt));
+}
+
+function TypeTabStrip({
+  types,
+  documents,
+  selectedId,
+  onSelect,
+}: {
+  types: DocumentTypeDef[];
+  documents: DocumentRecord[];
+  selectedId: string;
+  onSelect: (typeId: string) => void;
+}) {
+  const swipeStart = useRef<{ x: number; y: number } | null>(null);
+  const swiped = useRef(false);
+
+  useEffect(() => {
+    document.getElementById(`type-tab-${selectedId}`)?.scrollIntoView({
+      behavior: "smooth",
+      inline: "center",
+      block: "nearest",
+    });
+  }, [selectedId]);
+
+  const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
+    swipeStart.current = { x: event.clientX, y: event.clientY };
+    swiped.current = false;
+  };
+
+  const onPointerUp = (event: PointerEvent<HTMLDivElement>) => {
+    const start = swipeStart.current;
+    swipeStart.current = null;
+    if (!start) return;
+    const dx = event.clientX - start.x;
+    const dy = event.clientY - start.y;
+    if (Math.abs(dx) < 48 || Math.abs(dx) <= Math.abs(dy)) return;
+    swiped.current = true;
+    const index = types.findIndex((type) => type.id === selectedId);
+    const next = types[index + (dx < 0 ? 1 : -1)];
+    if (next) onSelect(next.id);
+  };
+
+  return (
+    <div
+      className="doc-type-tabs"
+      role="tablist"
+      aria-label="Document types"
+      onPointerDown={onPointerDown}
+      onPointerUp={onPointerUp}
+      onPointerCancel={() => {
+        swipeStart.current = null;
+      }}
+    >
+      {types.map((type) => {
+        const copies = copiesForType(documents, type.id);
+        const current = copies.find((doc) => doc.isCurrent) ?? copies[0];
+        const status = current ? computeStatus(current) : "missing";
+        const selected = type.id === selectedId;
+        return (
+          <button
+            key={type.id}
+            id={`type-tab-${type.id}`}
+            type="button"
+            role="tab"
+            aria-selected={selected}
+            className={`doc-type-tab ${selected ? "selected" : ""} ${status}`}
+            onClick={() => {
+              if (swiped.current) return;
+              onSelect(type.id);
+            }}
+          >
+            <span className="doc-type-tab-label">{type.label}</span>
+            <span className="doc-count">{copies.length}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function TypeAccordion({
   types,
   documents,
@@ -1074,9 +1166,7 @@ function TypeAccordion({
 }) {
   const groups = types
     .map((type) => {
-      const copies = documents
-        .filter((doc) => doc.typeId === type.id)
-        .sort((a, b) => Number(b.isCurrent) - Number(a.isCurrent) || b.createdAt.localeCompare(a.createdAt));
+      const copies = copiesForType(documents, type.id);
       const current = copies.find((doc) => doc.isCurrent) ?? copies[0];
       return { type, copies, current };
     })
@@ -1115,15 +1205,7 @@ function TypeAccordion({
                       : `${copies.length} ${copies.length === 1 ? "document" : "documents"}`}
                 </p>
               </div>
-              <span className={`badge ${status}`}>
-                {status === "current"
-                  ? "Current"
-                  : status === "expiring"
-                    ? "Expiring"
-                    : status === "missing"
-                      ? "Missing"
-                      : "Outdated"}
-              </span>
+              <span className={`badge ${status}`}>{statusBadgeText(status)}</span>
             </button>
             {open && (
               <>
@@ -1159,6 +1241,7 @@ function DocumentsView({
   allDocuments,
   expandedTypeId,
   onExpand,
+  onAdd,
   onScan,
   onDeleted,
 }: {
@@ -1166,6 +1249,7 @@ function DocumentsView({
   allDocuments: DocumentRecord[];
   expandedTypeId: string | null;
   onExpand: (typeId: string | null, documentId?: string) => void;
+  onAdd: () => void;
   onScan: (typeId: string) => void;
   onDeleted: (id: string) => void;
 }) {
@@ -1176,37 +1260,143 @@ function DocumentsView({
           type.categoryId === category.id && (type.id !== "other" || allDocuments.some((doc) => doc.typeId === "other")),
       );
       const count = allDocuments.filter((doc) => doc.categoryId === category.id).length;
-      return { category, types, count };
+      const statuses = types.map((type) => {
+        const copies = copiesForType(allDocuments, type.id);
+        const current = copies.find((doc) => doc.isCurrent) ?? copies[0];
+        return current ? computeStatus(current) : "missing";
+      });
+      return {
+        category,
+        types,
+        count,
+        ready: statuses.filter((status) => status === "current").length,
+        attention: statuses.filter((status) => status === "outdated" || status === "expiring").length,
+        missing: statuses.filter((status) => status === "missing").length,
+      };
     })
     .filter((group) => group.types.length);
+
+  const selectedType = expandedTypeId ? typeById(expandedTypeId) : null;
+  const selectedCategoryId =
+    catalog.find((group) => group.category.id === selectedType?.categoryId)?.category.id ??
+    catalog.find((group) => group.count > 0)?.category.id ??
+    catalog[0]?.category.id ??
+    null;
+
+  const selectType = (typeId: string) => {
+    const copies = copiesForType(allDocuments, typeId);
+    const current = copies.find((doc) => doc.isCurrent) ?? copies[0];
+    onExpand(typeId, current?.id);
+    window.requestAnimationFrame(() => {
+      document.getElementById(`category-${typeById(typeId).categoryId}`)?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    });
+  };
+
+  const selectCategory = (categoryId: string) => {
+    const group = catalog.find((item) => item.category.id === categoryId);
+    if (!group) return;
+    if (selectedCategoryId === categoryId && expandedTypeId) {
+      window.requestAnimationFrame(() => {
+        document.getElementById(`category-${categoryId}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+      return;
+    }
+    const preferred =
+      group.types.find((type) => type.id === expandedTypeId) ??
+      group.types.find((type) => copiesForType(allDocuments, type.id).length > 0) ??
+      group.types[0];
+    if (preferred) selectType(preferred.id);
+  };
 
   return (
     <>
       {documents.length === 0 && (
         <div className="card empty">
           <h2>Nothing indexed yet</h2>
-          <p>Tap a category below, then Scan with Phone. That type is selected before the camera opens.</p>
+          <p>Tap a category, pick a type tab, then Scan with your phone. That type is selected before the camera opens.</p>
         </div>
       )}
-      {catalog.map((group) => (
-        <section key={group.category.id} className="doc-category">
-          <div className="doc-category-head">
-            <h2>{group.category.label}</h2>
-            <span className="meta">
-              {group.count} {group.count === 1 ? "document" : "documents"}
-            </span>
-          </div>
-          <TypeAccordion
-            types={group.types}
-            documents={allDocuments}
-            expandedTypeId={expandedTypeId}
-            includeEmpty
-            onExpand={onExpand}
-            onScan={onScan}
-            onDeleted={onDeleted}
-          />
-        </section>
-      ))}
+      {catalog.map((group) => {
+        const selected = group.category.id === selectedCategoryId;
+        const activeType =
+          group.types.find((type) => type.id === expandedTypeId) ??
+          group.types.find((type) => copiesForType(allDocuments, type.id).length > 0) ??
+          group.types[0];
+        const copies = activeType ? copiesForType(allDocuments, activeType.id) : [];
+        const current = copies.find((doc) => doc.isCurrent) ?? copies[0];
+        const status = current ? computeStatus(current) : "missing";
+        return (
+          <section
+            key={group.category.id}
+            id={`category-${group.category.id}`}
+            className={`doc-category-card ${selected ? "selected" : ""}`}
+          >
+            <button
+              type="button"
+              className="doc-category-card-head"
+              aria-pressed={selected}
+              onClick={() => selectCategory(group.category.id)}
+            >
+              <div>
+                <h2>{group.category.label}</h2>
+                <p className="meta">
+                  {group.count} {group.count === 1 ? "document" : "documents"}
+                  {group.ready > 0 ? ` · ${group.ready} current` : ""}
+                  {group.attention > 0 ? ` · ${group.attention} needs attention` : ""}
+                  {group.missing > 0 ? ` · ${group.missing} missing` : ""}
+                </p>
+              </div>
+              {selected && <span className="badge current">Selected</span>}
+            </button>
+            {selected && activeType && (
+              <>
+                <TypeTabStrip
+                  types={group.types}
+                  documents={allDocuments}
+                  selectedId={activeType.id}
+                  onSelect={selectType}
+                />
+                <div className="doc-type-toolbar">
+                  <div className="doc-type-selected">
+                    <div>
+                      <h3>
+                        {activeType.label} <span className="doc-count">{copies.length}</span>
+                      </h3>
+                      <p className="meta">
+                        {copies.length === 0
+                          ? "Nothing saved here yet. Scan into this type."
+                          : current
+                            ? `${copies.length} ${copies.length === 1 ? "document" : "documents"} · ${freshnessLabel(current)}`
+                            : `${copies.length} ${copies.length === 1 ? "document" : "documents"}`}
+                      </p>
+                    </div>
+                    <span className={`badge ${status}`}>{statusBadgeText(status)}</span>
+                  </div>
+                  <ScanCta compact onScan={() => onScan(activeType.id)} onAdd={onAdd} />
+                </div>
+                {copies.length === 0 && <p className="meta doc-type-empty">Nothing saved here yet.</p>}
+                {current && (
+                  <div className="doc-rail" aria-label={`${activeType.label} copies`}>
+                    {copies.map((doc) => (
+                      <div key={doc.id} className="doc-slide">
+                        <DocumentDetail
+                          doc={doc}
+                          previous={copies.filter((item) => item.id !== doc.id && !item.isCurrent)}
+                          compact
+                          onDeleted={() => onDeleted(doc.id)}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </section>
+        );
+      })}
     </>
   );
 }
