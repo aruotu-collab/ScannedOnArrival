@@ -612,6 +612,43 @@ button {
   background: #111;
 }
 
+.preview.preview-pages {
+  display: block;
+  padding: 0;
+}
+
+.page-rail {
+  display: flex;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
+}
+
+.page-slide {
+  min-width: 100%;
+  flex: 0 0 100%;
+  margin: 0;
+  scroll-snap-align: start;
+  background: #111;
+}
+
+.page-slide img {
+  width: 100%;
+  height: 420px;
+  object-fit: contain;
+  display: block;
+  background: #111;
+}
+
+.page-slide figcaption {
+  margin: 0;
+  padding: 6px 0 10px;
+  text-align: center;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #f7f1e4;
+}
+
 .modal-back.scan-open {
   padding: 12px;
 }
@@ -807,7 +844,8 @@ button {
 }
 
 .doc-slide .preview img,
-.doc-slide .preview iframe {
+.doc-slide .preview iframe,
+.doc-slide .page-slide img {
   height: 280px;
 }
 

@@ -19,14 +19,15 @@ import { buildBackup, downloadBackup, parseBackupFile, restoreBackup } from "./l
 import { enableNotifications, listAttention, maybeNotify, type AttentionItem } from "./lib/reminders";
 import { classifySmart } from "./lib/openai";
 import { flattenImageFile } from "./lib/detect";
-import { cropImageFile, enhanceDocument, stitchImages, type CropInsets } from "./lib/scan";
+import { cropImageFile, enhanceDocument, type CropInsets } from "./lib/scan";
 import { ScannerScreen } from "./scanner/ScannerScreen";
 import {
   clearAllData,
   deleteDocument,
   loadDocuments,
-  loadFileBlob,
+  loadDocumentPages,
   loadInbox,
+  pageBlobId,
   loadSettings,
   saveDocuments,
   saveFileBlob,
@@ -333,12 +334,16 @@ export default function App() {
       locationProvider: draft.locationProvider,
       fileName: draft.fileName,
       mimeType: draft.mimeType,
+      pageCount: draft.files && draft.files.length > 1 ? draft.files.length : undefined,
       isCurrent: makeCurrent || sameType.every((d) => !d.isCurrent),
     };
     const saved = [record, ...nextDocs];
     await persistDocs(saved);
-    if (draft.file && draft.storageKind === "stored") {
-      await saveFileBlob({ id, documentId: id, blob: draft.file });
+    const pageFiles = draft.files?.length ? draft.files : draft.file ? [draft.file] : [];
+    if (draft.storageKind === "stored") {
+      for (let index = 0; index < pageFiles.length; index += 1) {
+        await saveFileBlob({ id: pageBlobId(id, index), documentId: id, blob: pageFiles[index] });
+      }
     }
     setAddOpen(false);
     setIncomingFile(null);
@@ -853,23 +858,23 @@ function DocumentDetail({
   compact?: boolean;
   onDeleted: () => void;
 }) {
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [pageUrls, setPageUrls] = useState<string[]>([]);
 
   useEffect(() => {
-    let url: string | null = null;
+    let urls: string[] = [];
     let alive = true;
     (async () => {
       if (doc.storageKind !== "stored") return;
-      const blob = await loadFileBlob(doc.id);
-      if (!alive || !blob) return;
-      url = URL.createObjectURL(blob);
-      setPreviewUrl(url);
+      const blobs = await loadDocumentPages(doc.id, doc.pageCount ?? 1);
+      if (!alive || blobs.length === 0) return;
+      urls = blobs.map((blob) => URL.createObjectURL(blob));
+      setPageUrls(urls);
     })();
     return () => {
       alive = false;
-      if (url) URL.revokeObjectURL(url);
+      urls.forEach((url) => URL.revokeObjectURL(url));
     };
-  }, [doc.id, doc.storageKind]);
+  }, [doc.id, doc.pageCount, doc.storageKind]);
 
   return (
     <aside className="card doc-detail">
@@ -884,14 +889,30 @@ function DocumentDetail({
         <span className={`badge ${computeStatus(doc)}`}>{computeStatus(doc)}</span>
         <span className={`badge ${doc.storageKind}`}>{storageVerb(doc)}</span>
       </div>
-      {previewUrl && (
-        <div className="preview" style={{ marginBottom: 12 }}>
-          {doc.mimeType?.startsWith("image/") ? (
-            <img src={previewUrl} alt={doc.title} />
-          ) : (
-            <iframe title={doc.title} src={previewUrl} />
+      {pageUrls.length > 0 && (
+        <>
+          <div className={`preview ${pageUrls.length > 1 ? "preview-pages" : ""}`} style={{ marginBottom: 12 }}>
+            {pageUrls.length === 1 ? (
+              doc.mimeType?.startsWith("image/") ? (
+                <img src={pageUrls[0]} alt={doc.title} />
+              ) : (
+                <iframe title={doc.title} src={pageUrls[0]} />
+              )
+            ) : (
+              <div className="page-rail" aria-label="Document pages">
+                {pageUrls.map((url, index) => (
+                  <figure key={`${doc.id}-page-${index}`} className="page-slide">
+                    <img src={url} alt={`${doc.title} page ${index + 1}`} />
+                    <figcaption>Page {index + 1} of {pageUrls.length}</figcaption>
+                  </figure>
+                ))}
+              </div>
+            )}
+          </div>
+          {pageUrls.length > 1 && (
+            <p className="meta">Swipe to see the other {pageUrls.length === 2 ? "page" : `${pageUrls.length - 1} pages`}.</p>
           )}
-        </div>
+        </>
       )}
       {doc.storageKind === "referenced" && (
         <div className="notice">
@@ -1360,6 +1381,7 @@ function AddDocumentModal({
     method: SourceKind,
     storageKind: AddDraft["storageKind"],
     preparedText?: string,
+    pageFiles?: File[],
   ) => {
     setBusy(true);
     setBusyLabel(isImage(file) ? "Reading the page with on-device OCR…" : "Reading the document locally…");
@@ -1382,10 +1404,12 @@ function AddDocumentModal({
         text,
         apiKey: openaiApiKey || undefined,
       });
+      const pagesToStore = pageFiles?.length ? pageFiles : [file];
       const next = applyClassification({
         method,
-        file,
-        previewUrl: isImage(file) ? URL.createObjectURL(file) : undefined,
+        file: pagesToStore[0],
+        files: pagesToStore,
+        previewUrl: isImage(pagesToStore[0]) ? URL.createObjectURL(pagesToStore[0]) : undefined,
         classified,
         title: classified.title,
         typeId: classified.typeId,
@@ -1399,8 +1423,8 @@ function AddDocumentModal({
             ? "Stored locally in ScannedOnArrival"
             : `${file.name} from Files`,
         locationProvider: storageKind === "stored" ? "local" : providerFromLabel(file.name) === "local" ? "files" : "files",
-        fileName: file.name,
-        mimeType: file.type,
+        fileName: pagesToStore[0].name,
+        mimeType: pagesToStore[0].type,
       });
       setDraft(next);
       const canAuto = classified.typeId !== "other" && classified.confidence !== "low";
@@ -1470,7 +1494,7 @@ function AddDocumentModal({
       return;
     }
     setBusy(true);
-    setBusyLabel(files.length > 1 ? "Joining pages and reading them…" : "Reading the page with on-device OCR…");
+    setBusyLabel(files.length > 1 ? "Reading the pages…" : "Reading the page with on-device OCR…");
     try {
       const texts: string[] = [];
       for (const file of files) {
@@ -1480,8 +1504,7 @@ function AddDocumentModal({
           texts.push("");
         }
       }
-      const combined = await stitchImages(files);
-      await handleFile(combined, "camera", "stored", texts.join("\n"));
+      await handleFile(files[0], "camera", "stored", texts.join("\n"), files);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not finish that scan.");
       setBusy(false);

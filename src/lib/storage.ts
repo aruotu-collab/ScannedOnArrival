@@ -53,12 +53,35 @@ export async function saveDocuments(docs: DocumentRecord[]): Promise<void> {
   db.close();
 }
 
+export function pageBlobId(documentId: string, index: number): string {
+  return index <= 0 ? documentId : `${documentId}::p${index}`;
+}
+
 export async function deleteDocument(id: string): Promise<void> {
   const db = await openDb();
   const tx = db.transaction(["documents", "files"], "readwrite");
+  const doc = (await reqToPromise(tx.objectStore("documents").get(id))) as DocumentRecord | undefined;
   await reqToPromise(tx.objectStore("documents").delete(id));
-  await reqToPromise(tx.objectStore("files").delete(id));
+  const pageCount = Math.max(1, doc?.pageCount ?? 1);
+  for (let index = 0; index < pageCount; index += 1) {
+    await reqToPromise(tx.objectStore("files").delete(pageBlobId(id, index)));
+  }
+  const leftovers = (await reqToPromise(tx.objectStore("files").getAll())) as FileBlobRecord[];
+  await Promise.all(
+    leftovers
+      .filter((file) => file.documentId === id || file.id === id || file.id.startsWith(`${id}::p`))
+      .map((file) => reqToPromise(tx.objectStore("files").delete(file.id))),
+  );
   db.close();
+}
+
+export async function loadDocumentPages(documentId: string, pageCount = 1): Promise<Blob[]> {
+  const pages: Blob[] = [];
+  for (let index = 0; index < Math.max(1, pageCount); index += 1) {
+    const blob = await loadFileBlob(pageBlobId(documentId, index));
+    if (blob) pages.push(blob);
+  }
+  return pages;
 }
 
 export async function saveFileBlob(record: FileBlobRecord): Promise<void> {

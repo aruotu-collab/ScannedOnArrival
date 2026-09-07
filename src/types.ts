@@ -70,6 +70,7 @@ export interface DocumentRecord {
   locationProvider: LocationProvider;
   fileName?: string;
   mimeType?: string;
+  pageCount?: number;
   isCurrent: boolean;
   supersededBy?: string;
   notes?: string;
@@ -145,4 +146,5 @@ export interface AddDraft {
   locationProvider: LocationProvider;
   fileName?: string;
   mimeType?: string;
+  files?: File[];
 }
