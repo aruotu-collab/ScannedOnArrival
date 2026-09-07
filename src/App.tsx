@@ -659,7 +659,7 @@ export default function App() {
             </div>
             <p>
               {view === "ready" && "What’s current, missing, or overdue — organised by document type, not files."}
-              {view === "demo" && "Move the phone to line up the letter, tap Scan, then see the result."}
+              {view === "demo" && "Hold the phone over the letter, tap Scan when it says Ready, then see the result."}
               {view === "documents" && "Tap a category, then a type. Swipe the tabs for other types; swipe the page for other copies."}
               {view === "tree" && "A filing-cabinet view. The folders are logical; the files can live anywhere."}
               {view === "inbox" && "Letterbox or inbox: both are ways documents arrive. Email stays optional."}
@@ -911,8 +911,8 @@ function DemoView({
       {phase === "intro" && (
         <>
           <p className="meta">
-            No paper needed. A sample letter is already on the table. Move the phone to line it up — same as a real
-            scan — then tap the shutter.
+            No paper needed. A sample letter is already on the table. Hold the phone over it — the outline locks on,
+            same as a real scan — then tap the shutter.
           </p>
           <div className="demo-cta">
             <button type="button" className="primary demo-try" disabled={loading} onClick={() => void startScan()}>
@@ -925,8 +925,8 @@ function DemoView({
           {error && <p className="meta">{error}</p>}
           <ol className="demo-menu compact">
             <li>
-              <strong>1. Move the phone</strong>
-              <span>The outline finds the page. Follow Move closer, Move left, Hold steady.</span>
+              <strong>1. Hold the phone over the letter</strong>
+              <span>The outline finds the page and locks on. Nudge if it asks you to move closer.</span>
             </li>
             <li>
               <strong>2. Tap the shutter</strong>

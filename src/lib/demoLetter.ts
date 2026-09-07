@@ -87,6 +87,9 @@ const LETTER_ANGLE = -0.065;
 const LETTER_CX = DEMO_DESK_W / 2 + 18;
 const LETTER_CY = DEMO_DESK_H / 2 + 10;
 
+export const DEMO_LETTER_CENTER = { x: LETTER_CX, y: LETTER_CY };
+export const DEMO_LETTER_AREA = LETTER_W * LETTER_H;
+
 export type DemoPoint = { x: number; y: number };
 
 export function demoLetterCornersPx(): DemoPoint[] {
@@ -102,9 +105,9 @@ export function demoLetterCornersPx(): DemoPoint[] {
 }
 
 export const DEMO_START_POSE = {
-  cx: LETTER_CX + 260,
-  cy: LETTER_CY + 40,
-  viewH: 3040,
+  cx: LETTER_CX + 70,
+  cy: LETTER_CY + 36,
+  viewH: 2140,
 } as const;
 
 function drawDeskPhoto(letter: HTMLCanvasElement): HTMLCanvasElement {

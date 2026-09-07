@@ -1,6 +1,13 @@
-import { DEMO_DESK_H, DEMO_DESK_W, DEMO_START_POSE, type DemoPoint } from "./demoLetter";
+import {
+  DEMO_DESK_H,
+  DEMO_DESK_W,
+  DEMO_LETTER_AREA,
+  DEMO_LETTER_CENTER,
+  DEMO_START_POSE,
+  type DemoPoint,
+} from "./demoLetter";
 import { analyzeQuad, orderQuad, type Point, type Quad } from "../scanner/geometry";
-import { guidanceFromDetection, type Guidance } from "../scanner/guidance";
+import type { Guidance } from "../scanner/guidance";
 
 export type DemoPose = {
   cx: number;
@@ -21,6 +28,29 @@ export function createDemoPose(): DemoPose {
     tiltX: 0,
     tiltY: 0,
   };
+}
+
+export function idealDemoPose(screenW: number, screenH: number): DemoPose {
+  const aspect = screenW / Math.max(1, screenH);
+  const visible = DEMO_LETTER_AREA / 0.5;
+  return {
+    cx: DEMO_LETTER_CENTER.x,
+    cy: DEMO_LETTER_CENTER.y,
+    viewH: Math.sqrt(visible / aspect),
+    tiltX: 0,
+    tiltY: 0,
+  };
+}
+
+export function pullTowardIdeal(pose: DemoPose, ideal: DemoPose, amount: number): DemoPose {
+  const mix = (from: number, to: number) => from + (to - from) * amount;
+  return clampDemoPose({
+    cx: mix(pose.cx, ideal.cx),
+    cy: mix(pose.cy, ideal.cy),
+    viewH: mix(pose.viewH, ideal.viewH),
+    tiltX: mix(pose.tiltX, 0),
+    tiltY: mix(pose.tiltY, 0),
+  });
 }
 
 export function clampDemoPose(pose: DemoPose): DemoPose {
@@ -48,7 +78,7 @@ export function deskImageStyle(pose: DemoPose, screenW: number, screenH: number)
     height: `${DEMO_DESK_H * scaleY}px`,
     left: `${-(pose.cx - viewW / 2) * scaleX}px`,
     top: `${-(pose.cy - viewH / 2) * scaleY}px`,
-    transform: `perspective(920px) rotateY(${pose.tiltX * 22}deg) rotateX(${-pose.tiltY * 22}deg)`,
+    transform: "none",
   };
 }
 
@@ -73,19 +103,46 @@ export function projectLetterQuad(
   return orderQuad(points);
 }
 
-function cornersVisible(quad: Quad, width: number, height: number) {
-  const points = [quad.topLeft, quad.topRight, quad.bottomRight, quad.bottomLeft];
-  return points.filter(
-    (point) => point.x > -width * 0.12 && point.x < width * 1.12 && point.y > -height * 0.12 && point.y < height * 1.12,
+function cornersOnScreen(quad: Quad, width: number, height: number) {
+  const pad = 18;
+  return [quad.topLeft, quad.topRight, quad.bottomRight, quad.bottomLeft].filter(
+    (point) => point.x > -pad && point.x < width + pad && point.y > -pad && point.y < height + pad,
   ).length;
 }
 
-export function demoGuidance(quad: Quad, width: number, height: number, stable: boolean): Guidance {
-  if (cornersVisible(quad, width, height) < 2) {
+export function demoGuidance(quad: Quad, width: number, height: number, held: boolean): Guidance {
+  const seen = cornersOnScreen(quad, width, height);
+  if (seen < 2) {
     return { message: "Find the document", ready: false, reason: "no-document" };
   }
   const metrics = analyzeQuad(quad, width, height);
-  return guidanceFromDetection(metrics, 0.86, stable);
+  if (metrics.areaRatio < 0.18) {
+    return { message: "Move closer", ready: false, reason: "too-far" };
+  }
+  if (metrics.areaRatio > 0.9) {
+    return { message: "Move further away", ready: false, reason: "too-close" };
+  }
+  if (Math.abs(metrics.centreOffsetX) > 0.3 && Math.abs(metrics.centreOffsetX) >= Math.abs(metrics.centreOffsetY)) {
+    return { message: metrics.centreOffsetX < 0 ? "Move left" : "Move right", ready: false, reason: "off-centre" };
+  }
+  if (Math.abs(metrics.centreOffsetY) > 0.3) {
+    return { message: metrics.centreOffsetY < 0 ? "Move up" : "Move down", ready: false, reason: "off-centre" };
+  }
+  if (!held) {
+    return { message: "Hold steady", ready: false, reason: "motion" };
+  }
+  return { message: "Ready", ready: true, reason: "ready" };
+}
+
+export function letterMostlyInView(quad: Quad, width: number, height: number) {
+  const metrics = analyzeQuad(quad, width, height);
+  return (
+    cornersOnScreen(quad, width, height) >= 3 &&
+    metrics.areaRatio >= 0.2 &&
+    metrics.areaRatio <= 0.88 &&
+    Math.abs(metrics.centreOffsetX) < 0.26 &&
+    Math.abs(metrics.centreOffsetY) < 0.26
+  );
 }
 
 export function poseTravel(a: DemoPose, b: DemoPose) {

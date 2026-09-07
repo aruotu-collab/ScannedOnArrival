@@ -6,11 +6,12 @@ import {
   demoGuidance,
   deskImageStyle,
   drawDemoOverlay,
-  poseTravel,
+  idealDemoPose,
+  letterMostlyInView,
+  pullTowardIdeal,
   projectLetterQuad,
   type DemoPose,
 } from "../lib/demoScan";
-import { analyzeQuad } from "./geometry";
 
 const letterCorners = demoLetterCornersPx();
 
@@ -28,15 +29,14 @@ export function DemoScanner({
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const poseRef = useRef<DemoPose>(createDemoPose());
   const baseRef = useRef<DemoPose>(createDemoPose());
-  const originRef = useRef<{ beta: number; gamma: number } | null>(null);
-  const lastPoseRef = useRef<DemoPose>(createDemoPose());
-  const stableCountRef = useRef(0);
+  const lastOrientRef = useRef<{ beta: number; gamma: number } | null>(null);
+  const goodFramesRef = useRef(0);
   const pointersRef = useRef(new Map<number, { x: number; y: number }>());
   const dragRef = useRef<{ id: number; x: number; y: number; cx: number; cy: number } | null>(null);
   const pinchRef = useRef<{ dist: number; viewH: number } | null>(null);
   const capturingRef = useRef(false);
 
-  const [hint, setHint] = useState("Find the document");
+  const [hint, setHint] = useState("Hold the phone over the letter");
   const [locked, setLocked] = useState(false);
   const [capturing, setCapturing] = useState(false);
   const [hasMotion, setHasMotion] = useState(false);
@@ -54,6 +54,13 @@ export function DemoScanner({
       if (box && img && overlay) {
         const width = box.clientWidth;
         const height = box.clientHeight;
+        if (!capturingRef.current) {
+          const dragging = Boolean(dragRef.current || pinchRef.current);
+          poseRef.current = pullTowardIdeal(poseRef.current, idealDemoPose(width, height), dragging ? 0.025 : 0.065);
+          if (!dragging) {
+            baseRef.current = { ...poseRef.current, tiltX: 0, tiltY: 0 };
+          }
+        }
         const pose = poseRef.current;
         const style = deskImageStyle(pose, width, height);
         img.style.width = style.width;
@@ -63,22 +70,20 @@ export function DemoScanner({
         img.style.transform = style.transform;
 
         const quad = projectLetterQuad(letterCorners, pose, width, height);
-        const travel = poseTravel(pose, lastPoseRef.current);
-        if (travel < 0.08) stableCountRef.current += 1;
-        else stableCountRef.current = 0;
-        lastPoseRef.current = { ...pose };
-        const stable = stableCountRef.current >= 3;
+        const good = letterMostlyInView(quad, width, height);
+        if (good) goodFramesRef.current += 1;
+        else goodFramesRef.current = 0;
+        const held = goodFramesRef.current >= 16;
         const guidance = capturingRef.current
           ? { message: "Saving this page…", ready: true, reason: "saving" }
-          : demoGuidance(quad, width, height, stable);
-        const metrics = analyzeQuad(quad, width, height);
+          : demoGuidance(quad, width, height, held);
 
         if (now - lastUi > 80) {
           lastUi = now;
           setHint(guidance.message);
           setLocked(guidance.ready);
         }
-        drawDemoOverlay(overlay, width, height, quad, guidance.ready, metrics.clipped);
+        drawDemoOverlay(overlay, width, height, quad, guidance.ready, !good);
       }
       raf = requestAnimationFrame(tick);
     };
@@ -91,24 +96,25 @@ export function DemoScanner({
 
   useEffect(() => {
     const onOrient = (event: DeviceOrientationEvent) => {
-      if (capturingRef.current) return;
+      if (capturingRef.current || dragRef.current || pinchRef.current) return;
       if (event.beta == null || event.gamma == null) return;
-      if (!originRef.current) {
-        originRef.current = { beta: event.beta, gamma: event.gamma };
+      if (!lastOrientRef.current) {
+        lastOrientRef.current = { beta: event.beta, gamma: event.gamma };
         return;
       }
-      const origin = originRef.current;
-      const dBeta = event.beta - origin.beta;
-      const dGamma = event.gamma - origin.gamma;
-      if (Math.hypot(dBeta, dGamma) < 0.8 && !hasMotion) return;
+      const last = lastOrientRef.current;
+      const dBeta = event.beta - last.beta;
+      const dGamma = event.gamma - last.gamma;
+      lastOrientRef.current = { beta: event.beta, gamma: event.gamma };
+      if (Math.hypot(dBeta, dGamma) < 0.35) return;
       if (!hasMotion) setHasMotion(true);
-      const base = baseRef.current;
+      const pose = poseRef.current;
       poseRef.current = clampDemoPose({
-        cx: base.cx + dGamma * 16,
-        cy: base.cy + dBeta * 18,
-        viewH: base.viewH - dBeta * 14,
-        tiltX: dGamma / 32,
-        tiltY: dBeta / 36,
+        cx: pose.cx + dGamma * 5,
+        cy: pose.cy + dBeta * 5,
+        viewH: pose.viewH - dBeta * 3,
+        tiltX: 0,
+        tiltY: 0,
       });
     };
     window.addEventListener("deviceorientation", onOrient);
@@ -119,7 +125,6 @@ export function DemoScanner({
     const clamped = clampDemoPose(next);
     baseRef.current = { ...clamped, tiltX: 0, tiltY: 0 };
     poseRef.current = clamped;
-    originRef.current = null;
   };
 
   const pointerList = () => [...pointersRef.current.values()];
@@ -222,8 +227,8 @@ export function DemoScanner({
         <p className={`scanner-guidance ${locked ? "ok" : ""}`}>{capturing ? "Saving this page…" : hint}</p>
         <p className="scanner-privacy">
           {hasMotion
-            ? "Move the phone to line up the page · processed on this device"
-            : "Move the phone, or drag and pinch · processed on this device"}
+            ? "Hold the phone over the letter · processed on this device"
+            : "Hold the phone over the letter, or nudge the view · processed on this device"}
         </p>
         <div className="scanner-bottom">
           <span className="scanner-status">Demo</span>
