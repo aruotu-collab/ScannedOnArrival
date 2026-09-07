@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { createPortal } from "react-dom";
 import type {
   AddDraft,
@@ -28,6 +28,7 @@ import { buildBackup, downloadBackup, parseBackupFile, restoreBackup } from "./l
 import { enableNotifications, listAttention, maybeNotify, type AttentionItem } from "./lib/reminders";
 import { classifySmart } from "./lib/openai";
 import { flattenImageFile } from "./lib/detect";
+import { makeDemoLetterScenes } from "./lib/demoLetter";
 import { bleachScanBlob, cropImageFile, enhanceDocument, type CropInsets } from "./lib/scan";
 import { ScannerScreen } from "./scanner/ScannerScreen";
 import {
@@ -60,6 +61,19 @@ const DEFAULT_SETTINGS: AppSettings = {
 };
 
 const DEFAULT_CROP: CropInsets = { top: 4, right: 4, bottom: 4, left: 4 };
+const DEMO_DOC_ID = "demo-try-scan";
+const NAV_ITEMS: Array<{ id: ViewId; label: string; short: string }> = [
+  { id: "ready", label: "Ready", short: "Ready" },
+  { id: "demo", label: "Demo", short: "Demo" },
+  { id: "documents", label: "Documents", short: "Docs" },
+  { id: "tree", label: "Tree", short: "Tree" },
+  { id: "inbox", label: "Inbox", short: "Inbox" },
+  { id: "settings", label: "Settings", short: "Settings" },
+];
+
+function sleep(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
 
 function slugifyCatalogId(label: string, used: Set<string>): string {
   const base = label.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "") || "category";
@@ -92,6 +106,55 @@ function ProductBadge({ tone = "light" }: { tone?: "light" | "dark" }) {
       </span>
       <span>Web app in your browser</span>
     </p>
+  );
+}
+
+function PhoneGlyph() {
+  return (
+    <svg className="scan-cta-glyph" viewBox="0 0 48 48" aria-hidden="true">
+      <rect x="10.6" y="16" width="1.8" height="5.6" rx="0.9" fill="currentColor" />
+      <rect x="10.6" y="23.4" width="1.8" height="3.6" rx="0.9" fill="currentColor" />
+      <rect x="35.6" y="19.2" width="1.8" height="8.4" rx="0.9" fill="currentColor" />
+      <rect x="13.8" y="3.4" width="20.4" height="41.2" rx="6" fill="currentColor" />
+      <rect x="15.6" y="5.4" width="16.8" height="37.2" rx="4.2" fill="#1b3a2f" />
+      <rect x="20.2" y="6.8" width="7.6" height="2.8" rx="1.4" fill="currentColor" />
+      <circle cx="25.8" cy="8.2" r="0.72" fill="#1b3a2f" />
+      <rect x="18.4" y="12.8" width="11.2" height="16.8" rx="1.1" fill="currentColor" />
+      <path d="M26.2 12.8h3.4v3.4H27.4c-.66 0-1.2-.54-1.2-1.2Z" fill="#1b3a2f" opacity="0.22" />
+      <path d="M26.2 12.8 29.6 16.2h-2.1c-.72 0-1.3-.58-1.3-1.3Z" fill="#1b3a2f" opacity="0.4" />
+      <rect x="20.2" y="18.8" width="7.6" height="1.15" rx="0.55" fill="#1b3a2f" opacity="0.5" />
+      <rect x="20.2" y="21.4" width="7.6" height="1.15" rx="0.55" fill="#1b3a2f" opacity="0.38" />
+      <rect x="20.2" y="24" width="5.4" height="1.15" rx="0.55" fill="#1b3a2f" opacity="0.26" />
+    </svg>
+  );
+}
+
+function ScanCta({
+  onScan,
+  onAdd,
+  compact,
+}: {
+  onScan: () => void;
+  onAdd?: () => void;
+  compact?: boolean;
+}) {
+  return (
+    <div className={`scan-cta ${compact ? "compact" : ""}`}>
+      <button type="button" className="scan-cta-btn" onClick={onScan}>
+        <span className="scan-cta-icon">
+          <PhoneGlyph />
+        </span>
+        <span className="scan-cta-copy">
+          <strong>Scan with your phone</strong>
+          <em>Point this browser at the paper — no app to install</em>
+        </span>
+      </button>
+      {onAdd && (
+        <button type="button" className="scan-cta-add" onClick={onAdd}>
+          or add a PDF or file
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -391,6 +454,46 @@ export default function App() {
     await persistSettings({ ...settings, onboardingComplete: true, showDemoHousehold: true });
   };
 
+  const startTryDemo = async () => {
+    await persistSettings({ ...settings, onboardingComplete: true, showDemoHousehold: false });
+    setView("demo");
+  };
+
+  const saveDemoScan = async (file: File) => {
+    const existing = documents.find((doc) => doc.id === DEMO_DOC_ID);
+    const without = documents.filter((doc) => doc.id !== DEMO_DOC_ID);
+    const nextDocs = without.map((doc) =>
+      doc.typeId === "council_tax" && doc.isCurrent
+        ? { ...doc, isCurrent: false, supersededBy: DEMO_DOC_ID }
+        : doc,
+    );
+    const record: DocumentRecord = {
+      id: DEMO_DOC_ID,
+      title: "Council Tax 2026–27 (demo)",
+      typeId: "council_tax",
+      categoryId: "home",
+      period: "2026–27",
+      issuedOn: "2026-03-18",
+      lastChecked: todayIso(),
+      createdAt: existing?.createdAt ?? new Date().toISOString(),
+      storageKind: "stored",
+      source: "camera",
+      locationLabel: "Stored locally in ScannedOnArrival",
+      locationProvider: "local",
+      fileName: file.name,
+      mimeType: file.type || "image/jpeg",
+      pageCount: 1,
+      isCurrent: true,
+      notes: "Added from the in-app demo.",
+    };
+    await saveFileBlob({ id: pageBlobId(DEMO_DOC_ID, 0), documentId: DEMO_DOC_ID, blob: file });
+    await persistDocs([record, ...nextDocs]);
+    setSelectedId(DEMO_DOC_ID);
+    setExpandedTypeId("council_tax");
+    setView("documents");
+    setToast("Demo scan saved under Council Tax");
+  };
+
   const addDocument = async (draft: AddDraft, makeCurrent: boolean) => {
     const id = uid();
     const sameType = documents.filter((d) => d.typeId === draft.typeId);
@@ -500,6 +603,10 @@ export default function App() {
               <strong>See a household example</strong>
               <span>Load sample Council Tax, insurance, passport and statements so you can explore the views.</span>
             </button>
+            <button className="method featured" onClick={startTryDemo}>
+              <strong>Try a 30-second demo</strong>
+              <span>Watch a sample letter get scanned, then see it land under Council Tax. No paper needed.</span>
+            </button>
           </div>
         </div>
       </div>
@@ -515,15 +622,7 @@ export default function App() {
           <span>What you have, how current it is, and where it lives.</span>
         </div>
         <nav className="nav">
-          {(
-            [
-              ["ready", "Ready"],
-              ["documents", "Documents"],
-              ["tree", "Tree"],
-              ["inbox", "Inbox"],
-              ["settings", "Settings"],
-            ] as const
-          ).map(([id, label]) => (
+          {NAV_ITEMS.map(({ id, label }) => (
             <button key={id} className={view === id ? "active" : ""} onClick={() => setView(id)}>
               {label}
             </button>
@@ -546,6 +645,7 @@ export default function App() {
             <ProductBadge />
             <h1>
               {view === "ready" && "Ready"}
+              {view === "demo" && "Demo"}
               {view === "documents" && "Documents"}
               {view === "tree" && "Document tree"}
               {view === "inbox" && "Document inbox"}
@@ -553,16 +653,22 @@ export default function App() {
             </h1>
             <p>
               {view === "ready" && "What’s current, missing, or overdue — organised by document type, not files."}
+              {view === "demo" && "Try a scan with a sample letter, then see where it lands."}
               {view === "documents" && "Tap a document type to open it here. Swipe left or right for other copies."}
               {view === "tree" && "A filing-cabinet view. The folders are logical; the files can live anywhere."}
               {view === "inbox" && "Letterbox or inbox: both are ways documents arrive. Email stays optional."}
               {view === "settings" && "Keep the privacy story clear. Local by default, convenience only if you choose it."}
             </p>
           </div>
-          <button className="primary" onClick={() => openAdd(isDesktopLayout() ? "choose" : "camera")}>
-            Scan or add
-          </button>
         </header>
+        {view !== "demo" && (
+          <div className="scan-hero">
+            <ScanCta
+              onScan={() => openAdd("camera")}
+              onAdd={() => openAdd("choose")}
+            />
+          </div>
+        )}
 
         <div className="content">
           <InstallBanner
@@ -579,6 +685,7 @@ export default function App() {
                 if (documentId) setSelectedId(documentId);
               }}
               onAdd={() => openAdd(isDesktopLayout() ? "choose" : "camera")}
+              onOpenDemo={() => setView("demo")}
               onScan={(typeId) => openAdd("camera", typeId)}
               onDeleted={async (id) => {
                 await deleteDocument(id);
@@ -587,6 +694,7 @@ export default function App() {
               }}
             />
           )}
+          {view === "demo" && <DemoView onSave={saveDemoScan} />}
           {view === "documents" && (
             <DocumentsView
               documents={currentDocs}
@@ -695,9 +803,9 @@ export default function App() {
       </main>
 
       <nav className="mobile-nav">
-        {(["ready", "documents", "tree", "inbox", "settings"] as ViewId[]).map((id) => (
+        {NAV_ITEMS.map(({ id, short }) => (
           <button key={id} className={view === id ? "active" : ""} onClick={() => setView(id)}>
-            {id[0].toUpperCase() + id.slice(1)}
+            {short}
           </button>
         ))}
       </nav>
@@ -725,12 +833,138 @@ export default function App() {
   );
 }
 
+function DemoView({ onSave }: { onSave: (file: File) => Promise<void> }) {
+  const [phase, setPhase] = useState<"intro" | "scanning" | "result">("intro");
+  const [status, setStatus] = useState("Opening the camera…");
+  const [deskUrl, setDeskUrl] = useState<string | null>(null);
+  const [cleanUrl, setCleanUrl] = useState<string | null>(null);
+  const [file, setFile] = useState<File | null>(null);
+  const [viewerOpen, setViewerOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    return () => {
+      if (deskUrl) URL.revokeObjectURL(deskUrl);
+      if (cleanUrl) URL.revokeObjectURL(cleanUrl);
+    };
+  }, [deskUrl, cleanUrl]);
+
+  const runDemo = async () => {
+    setPhase("scanning");
+    setStatus("Opening the camera…");
+    try {
+      const scenes = await makeDemoLetterScenes();
+      if (deskUrl) URL.revokeObjectURL(deskUrl);
+      if (cleanUrl) URL.revokeObjectURL(cleanUrl);
+      setDeskUrl(URL.createObjectURL(scenes.desk));
+      setCleanUrl(URL.createObjectURL(scenes.clean));
+      setFile(scenes.clean);
+      await sleep(450);
+      setStatus("Finding the page…");
+      await sleep(1100);
+      setStatus("Straightening the letter…");
+      await sleep(900);
+      setStatus("Saving a clean copy…");
+      await sleep(700);
+      setPhase("result");
+    } catch {
+      setStatus("The demo letter could not be drawn. Try again.");
+      setPhase("intro");
+    }
+  };
+
+  const saveResult = async () => {
+    if (!file) return;
+    setSaving(true);
+    try {
+      await onSave(file);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="demo-view">
+      {phase === "intro" && (
+        <>
+          <ol className="demo-menu">
+            <li>
+              <strong>Point this tab at the paper</strong>
+              <span>Scan means the phone camera in this browser — not an App Store app.</span>
+            </li>
+            <li>
+              <strong>The page is found and cropped</strong>
+              <span>Edges straighten, dark rims go, and you get a clean letter.</span>
+            </li>
+            <li>
+              <strong>It lands under a document type</strong>
+              <span>This demo files a Council Tax bill under Home, then you can open the result.</span>
+            </li>
+          </ol>
+          <button type="button" className="primary demo-try" onClick={() => void runDemo()}>
+            Try the demo
+          </button>
+          <p className="meta">No paper needed. We use a sample letter so you can see the result.</p>
+        </>
+      )}
+
+      {phase === "scanning" && (
+        <div className="demo-stage">
+          <div className="demo-viewfinder">
+            {deskUrl ? <img src={deskUrl} alt="Sample letter on a table" /> : <div className="demo-viewfinder-wait" />}
+            <div className="scan-beam" />
+            <p className="scan-hint ok">{status}</p>
+          </div>
+        </div>
+      )}
+
+      {phase === "result" && cleanUrl && (
+        <div className="demo-result">
+          <p className="kicker">The result</p>
+          <h2>That’s the page that gets saved</h2>
+          <button type="button" className="demo-result-page" onClick={() => setViewerOpen(true)}>
+            <img src={cleanUrl} alt="Clean Council Tax demo letter" />
+          </button>
+          <div className="demo-result-card">
+            <span className="badge current">Current</span>
+            <div>
+              <strong>Council Tax 2026–27</strong>
+              <p className="meta">Home · stored on this device · scanned with your phone</p>
+            </div>
+          </div>
+          <div className="demo-actions">
+            <button type="button" className="primary" disabled={saving} onClick={() => void saveResult()}>
+              {saving ? "Saving…" : "See it in Documents"}
+            </button>
+            <button type="button" className="secondary" onClick={() => setViewerOpen(true)}>
+              View the full page
+            </button>
+            <button type="button" className="ghost" onClick={() => void runDemo()}>
+              Try the demo again
+            </button>
+          </div>
+        </div>
+      )}
+
+      {viewerOpen && cleanUrl && (
+        <FileViewer
+          title="Council Tax 2026–27 (demo)"
+          pages={[{ url: cleanUrl, image: true }]}
+          startAt={0}
+          onClose={() => setViewerOpen(false)}
+        />
+      )}
+    </div>
+  );
+}
+
 function ReadyView({
   documents,
   attention,
   expandedTypeId,
   onExpand,
   onAdd,
+  onOpenDemo,
   onScan,
   onDeleted,
 }: {
@@ -739,6 +973,7 @@ function ReadyView({
   expandedTypeId: string | null;
   onExpand: (typeId: string | null, documentId?: string) => void;
   onAdd: () => void;
+  onOpenDemo: () => void;
   onScan: (typeId: string) => void;
   onDeleted: (id: string) => void;
 }) {
@@ -755,23 +990,27 @@ function ReadyView({
   return (
     <>
       <div className="how-strip">
-        <strong>A phone scanner in your browser.</strong>
+        <strong>This is a phone scanner in your browser.</strong>
         <span>
-          Open this site in Safari or Chrome — not an App Store app. Scan means pointing your phone at the paper,
-          in this tab. On a computer, upload a PDF or scan the code below with your phone.
+          Point this tab at a letter — no App Store app. On a computer, add a PDF, or open the same site on
+          your phone to scan paper.
         </span>
       </div>
+      <button type="button" className="demo-teaser" onClick={onOpenDemo}>
+        <strong>Not sure yet? Try the demo</strong>
+        <span>Watch a letter get scanned and land under Council Tax — no paper needed.</span>
+      </button>
       <PhoneHandoff />
       <div className="summary-strip">
-        <div className="stat">
+        <div className="stat current">
           <b>{ready}</b>
           Current
         </div>
-        <div className="stat">
+        <div className="stat attention">
           <b>{outdated}</b>
           Needs attention
         </div>
-        <div className="stat">
+        <div className="stat missing">
           <b>{missing}</b>
           Missing
         </div>
@@ -877,22 +1116,19 @@ function TypeAccordion({
                 </p>
               </div>
               <span className={`badge ${status}`}>
-                {status === "current" ? "Current" : status === "expiring" ? "Expiring" : status === "missing" ? "Missing" : status}
+                {status === "current"
+                  ? "Current"
+                  : status === "expiring"
+                    ? "Expiring"
+                    : status === "missing"
+                      ? "Missing"
+                      : "Outdated"}
               </span>
             </button>
             {open && (
               <>
                 <div className="doc-type-toolbar">
-                  {onScan && (
-                    <button className="primary" type="button" onClick={() => onScan(type.id)}>
-                      Scan
-                    </button>
-                  )}
-                  {onAdd && (
-                    <button className="secondary" type="button" onClick={onAdd}>
-                      Add another way
-                    </button>
-                  )}
+                  {onScan && <ScanCta compact onScan={() => onScan(type.id)} onAdd={onAdd} />}
                 </div>
                 {copies.length === 0 && <p className="meta doc-type-empty">Nothing saved here yet.</p>}
                 {current && (
@@ -949,7 +1185,7 @@ function DocumentsView({
       {documents.length === 0 && (
         <div className="card empty">
           <h2>Nothing indexed yet</h2>
-          <p>Tap a category below, then Scan. That type is selected before the camera opens.</p>
+          <p>Tap a category below, then Scan with Phone. That type is selected before the camera opens.</p>
         </div>
       )}
       {catalog.map((group) => (
@@ -994,22 +1230,42 @@ function FileViewer({
   onClose: () => void;
 }) {
   const [index, setIndex] = useState(startAt);
+  const swipeStart = useRef<{ x: number; y: number } | null>(null);
   const page = pages[index];
+
+  const goTo = (next: number) => {
+    setIndex(Math.max(0, Math.min(pages.length - 1, next)));
+  };
 
   useEffect(() => {
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
-      if (event.key === "ArrowRight") setIndex((current) => Math.min(pages.length - 1, current + 1));
-      if (event.key === "ArrowLeft") setIndex((current) => Math.max(0, current - 1));
+      if (event.key === "ArrowRight") goTo(index + 1);
+      if (event.key === "ArrowLeft") goTo(index - 1);
     };
     window.addEventListener("keydown", onKey);
     return () => {
       document.body.style.overflow = previous;
       window.removeEventListener("keydown", onKey);
     };
-  }, [onClose, pages.length]);
+  }, [index, onClose, pages.length]);
+
+  const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
+    if (pages.length < 2) return;
+    swipeStart.current = { x: event.clientX, y: event.clientY };
+  };
+
+  const onPointerUp = (event: PointerEvent<HTMLDivElement>) => {
+    const start = swipeStart.current;
+    swipeStart.current = null;
+    if (!start || pages.length < 2) return;
+    const dx = event.clientX - start.x;
+    const dy = event.clientY - start.y;
+    if (Math.abs(dx) < 48 || Math.abs(dx) <= Math.abs(dy)) return;
+    goTo(index + (dx < 0 ? 1 : -1));
+  };
 
   if (!page) return null;
 
@@ -1023,28 +1279,35 @@ function FileViewer({
           <strong>{title}</strong>
           {pages.length > 1 && (
             <p className="meta">
-              Page {index + 1} of {pages.length}
+              Page {index + 1} of {pages.length} · swipe or drag sideways
             </p>
           )}
         </div>
       </div>
-      <div className="file-viewer-body">
+      <div
+        className={`file-viewer-body ${pages.length > 1 ? "swipeable" : ""}`}
+        onPointerDown={onPointerDown}
+        onPointerUp={onPointerUp}
+        onPointerCancel={() => {
+          swipeStart.current = null;
+        }}
+      >
         {page.image ? (
-          <img src={page.url} alt={`${title} page ${index + 1}`} />
+          <img src={page.url} alt={`${title} page ${index + 1}`} draggable={false} />
         ) : (
           <iframe title={title} src={page.url} />
         )}
       </div>
       {pages.length > 1 && (
         <div className="file-viewer-nav">
-          <button className="secondary" type="button" disabled={index === 0} onClick={() => setIndex((current) => current - 1)}>
+          <button className="secondary" type="button" disabled={index === 0} onClick={() => goTo(index - 1)}>
             Previous page
           </button>
           <button
             className="secondary"
             type="button"
             disabled={index === pages.length - 1}
-            onClick={() => setIndex((current) => current + 1)}
+            onClick={() => goTo(index + 1)}
           >
             Next page
           </button>
@@ -1320,7 +1583,7 @@ function InboxView({
       <div className="card">
         <h3>Privacy-first MVP</h3>
         <p className="meta">
-          Download the PDF from email, then choose Scan or add → Upload PDF. ScannedOnArrival reads it locally,
+          Download the PDF from email, then choose Scan with Phone or Add → Upload PDF. ScannedOnArrival reads it locally,
           identifies the type and date, and adds it to your index. The file never reaches a server.
         </p>
       </div>
