@@ -18,10 +18,12 @@ const letterCorners = demoLetterCornersPx();
 
 export function DemoScanner({
   deskUrl,
+  pageCaption = "Page 1",
   onClose,
   onCaptured,
 }: {
   deskUrl: string;
+  pageCaption?: string;
   onClose: () => void;
   onCaptured: () => void;
 }) {
@@ -241,7 +243,7 @@ export function DemoScanner({
           <button className="scanner-icon-btn" type="button" onClick={onClose} aria-label="Close scanner">
             ×
           </button>
-          <p className="scanner-pages">Page 1</p>
+          <p className="scanner-pages">{pageCaption}</p>
           <span className="scanner-icon-btn ghost" aria-hidden="true" />
         </div>
         <p className={`scanner-guidance ${locked ? "ok" : ""}`}>{capturing ? "Saving this page…" : hint}</p>

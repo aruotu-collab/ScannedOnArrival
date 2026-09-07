@@ -64,6 +64,7 @@ const DEFAULT_SETTINGS: AppSettings = {
 
 const DEFAULT_CROP: CropInsets = { top: 4, right: 4, bottom: 4, left: 4 };
 const DEMO_DOC_ID = "demo-try-scan";
+const DEMO_PAGE_LIMIT = 3;
 const NAV_ITEMS: Array<{ id: ViewId; label: string; short: string }> = [
   { id: "ready", label: "Ready", short: "Ready" },
   { id: "documents", label: "Documents", short: "Docs" },
@@ -746,7 +747,6 @@ export default function App() {
               fromDemo={demoLanding}
               showRealCta={demoLanding || fromDemoNav}
               onDismissDemo={() => setDemoLanding(false)}
-              onTryReal={openRealThing}
               onExpand={(typeId, documentId) => {
                 setExpandedTypeId(typeId);
                 if (documentId) setSelectedId(documentId);
@@ -902,9 +902,12 @@ function DemoView({
   const [period, setPeriod] = useState("2026–27");
   const swipeStart = useRef<{ x: number; y: number } | null>(null);
   const swiped = useRef(false);
+  const pagesRef = useRef(pages);
+  const captureLock = useRef(false);
+  pagesRef.current = pages;
 
   const currentPage = pages[activePage];
-  const demoPageLimit = 3;
+  const atPageLimit = pages.length >= DEMO_PAGE_LIMIT;
 
   useEffect(() => {
     return () => {
@@ -929,6 +932,11 @@ function DemoView({
     try {
       await enableDemoMotion();
       await prepareScenes();
+      if (pagesRef.current.length >= DEMO_PAGE_LIMIT) {
+        setPhase("pages");
+        return;
+      }
+      captureLock.current = false;
       setPhase("scanning");
     } catch {
       setError("The demo letter could not be drawn. Try again.");
@@ -937,14 +945,30 @@ function DemoView({
     }
   };
 
+  const addAnotherPage = () => {
+    if (pagesRef.current.length >= DEMO_PAGE_LIMIT) return;
+    captureLock.current = false;
+    setPhase("scanning");
+  };
+
   const keepCapture = () => {
-    if (!file || !cleanUrl) return;
-    setPages((current) => {
-      if (current.length >= demoPageLimit) return current;
-      const next = [...current, { id: uid(), file, url: cleanUrl, selected: true }];
-      setActivePage(next.length - 1);
-      return next;
-    });
+    if (captureLock.current) {
+      setPhase(pagesRef.current.length > 0 ? "pages" : "intro");
+      return;
+    }
+    if (!file || !cleanUrl) {
+      setPhase(pagesRef.current.length > 0 ? "pages" : "intro");
+      return;
+    }
+    if (pagesRef.current.length >= DEMO_PAGE_LIMIT) {
+      setPhase("pages");
+      return;
+    }
+    captureLock.current = true;
+    const next = [...pagesRef.current, { id: uid(), file, url: cleanUrl, selected: true }].slice(0, DEMO_PAGE_LIMIT);
+    pagesRef.current = next;
+    setPages(next);
+    setActivePage(next.length - 1);
     setPhase("pages");
   };
 
@@ -971,9 +995,15 @@ function DemoView({
 
   const dropPage = () => {
     const remaining = pages.filter((_, index) => index !== activePage);
+    pagesRef.current = remaining;
     setPages(remaining);
     setActivePage((index) => Math.max(0, Math.min(index, remaining.length - 1)));
-    setPhase(remaining.length === 0 ? "scanning" : "pages");
+    if (remaining.length === 0) {
+      captureLock.current = false;
+      setPhase("scanning");
+      return;
+    }
+    setPhase("pages");
   };
 
   const saveResult = async () => {
@@ -1034,7 +1064,8 @@ function DemoView({
       {phase === "scanning" && deskUrl && (
         <DemoScanner
           deskUrl={deskUrl}
-          onClose={() => setPhase(pages.length > 0 ? "pages" : "intro")}
+          pageCaption={`Page ${Math.min(pages.length + 1, DEMO_PAGE_LIMIT)} of ${DEMO_PAGE_LIMIT}`}
+          onClose={() => setPhase(pagesRef.current.length > 0 ? "pages" : "intro")}
           onCaptured={keepCapture}
         />
       )}
@@ -1053,8 +1084,8 @@ function DemoView({
           </div>
           <p className="meta">
             {pages.length > 1
-              ? `Swipe or drag sideways for page ${activePage + 1} of ${pages.length}. Demo mode keeps up to 3 pages.`
-              : "Add another page if the letter has a back, or save this file. Demo mode keeps up to 3 pages."}
+              ? `Swipe or drag sideways for page ${activePage + 1} of ${pages.length}. Demo mode keeps up to ${DEMO_PAGE_LIMIT} pages.`
+              : `Add another page if the letter has a back, or save this file. Demo mode keeps up to ${DEMO_PAGE_LIMIT} pages.`}
           </p>
           {pages.length > 1 && (
             <div className="page-thumbs">
@@ -1112,12 +1143,12 @@ function DemoView({
             Use this scan · tap the page to view the full file
           </label>
           <div className="scan-pages-actions">
-            {pages.length < demoPageLimit ? (
-              <button className="primary" type="button" onClick={() => setPhase("scanning")}>
+            {!atPageLimit ? (
+              <button className="primary" type="button" onClick={addAnotherPage}>
                 Add another page
               </button>
             ) : (
-              <p className="meta">Demo mode keeps up to 3 pages.</p>
+              <p className="meta">Demo mode keeps up to {DEMO_PAGE_LIMIT} pages.</p>
             )}
             <button
               className="primary"
@@ -1500,7 +1531,6 @@ function DocumentsView({
   fromDemo,
   showRealCta,
   onDismissDemo,
-  onTryReal,
   onExpand,
   onAdd,
   onScan,
@@ -1512,7 +1542,6 @@ function DocumentsView({
   fromDemo?: boolean;
   showRealCta?: boolean;
   onDismissDemo?: () => void;
-  onTryReal?: () => void;
   onExpand: (typeId: string | null, documentId?: string) => void;
   onAdd: () => void;
   onScan: (typeId: string) => void;
