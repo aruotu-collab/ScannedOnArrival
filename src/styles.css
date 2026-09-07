@@ -306,11 +306,11 @@ button {
 
 .try-demo-btn {
   flex-shrink: 0;
-  border: 1px solid #d4bc7a;
+  border: 0;
   border-radius: 999px;
   padding: 8px 14px;
-  background: #fbf6e8;
-  color: var(--forest);
+  background: #c43c2e;
+  color: #fff;
   font-weight: 800;
 }
 
@@ -447,8 +447,10 @@ button {
   color: #f7f1e4;
 }
 
-.primary.ready {
-  background: var(--moss);
+.primary.ready,
+.demo-real {
+  background: #2f7a58;
+  color: #fff;
   box-shadow: 0 0 0 3px rgba(47, 122, 88, 0.22);
 }
 
@@ -1891,6 +1893,7 @@ button {
   align-self: flex-start;
   padding: 14px 22px;
   font-size: 1rem;
+  color: #fff;
 }
 
 .demo-actions .demo-real {
