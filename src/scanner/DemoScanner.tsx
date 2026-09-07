@@ -229,6 +229,9 @@ export function DemoScanner({
 
   return (
     <div className="scanner-screen demo-scanner">
+      <p className="demo-ribbon demo-ribbon-bar" aria-hidden="true">
+        Demo
+      </p>
       <div
         className="scanner-preview"
         ref={previewRef}
@@ -239,6 +242,9 @@ export function DemoScanner({
       >
         <img ref={imgRef} className="demo-scanner-desk" src={deskUrl} alt="Sample letter on a table" draggable={false} />
         <canvas ref={overlayRef} className="scan-overlay" />
+        <span className="demo-ribbon demo-ribbon-corner" aria-hidden="true">
+          Demo
+        </span>
         <div className="scanner-top">
           <button className="scanner-icon-btn" type="button" onClick={onClose} aria-label="Close scanner">
             ×

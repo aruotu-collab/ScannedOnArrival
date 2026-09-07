@@ -632,7 +632,7 @@ export default function App() {
   }
 
   return (
-    <div className="app">
+    <div className={`app${view === "demo" || demoLanding ? " demo-mode" : ""}`}>
       <aside className="sidebar">
         <div className="wordmark">
           <ProductBadge tone="dark" />
@@ -686,6 +686,11 @@ export default function App() {
             </p>
           </div>
         </header>
+        {(view === "demo" || demoLanding) && (
+          <p className="demo-ribbon demo-ribbon-bar" aria-hidden="true">
+            Demo
+          </p>
+        )}
         {view === "documents" && (demoLanding || fromDemoNav) && (
           <div className="scan-hero">
             <button type="button" className="primary ready demo-real demo-landing-real" onClick={openRealThing}>
@@ -1072,6 +1077,9 @@ function DemoView({
 
       {phase === "pages" && currentPage && (
         <div className="demo-review">
+          <p className="demo-ribbon demo-ribbon-bar" aria-hidden="true">
+            Demo
+          </p>
           <div className="demo-review-top">
             <button className="scanner-icon-btn" type="button" onClick={closeReview} aria-label="Close">
               ×
@@ -1096,6 +1104,9 @@ function DemoView({
                   onClick={() => setActivePage(index)}
                 >
                   <img src={page.url} alt={`Page ${index + 1}`} />
+                  <span className="demo-ribbon demo-ribbon-corner" aria-hidden="true">
+                    Demo
+                  </span>
                 </button>
               ))}
             </div>
@@ -1123,6 +1134,9 @@ function DemoView({
                   }}
                 >
                   <img src={page.url} alt={`Scan ${index + 1}`} draggable={false} />
+                  <span className="demo-ribbon demo-ribbon-corner" aria-hidden="true">
+                    Demo
+                  </span>
                   {pages.length > 1 && <span className="demo-page-index">Page {index + 1}</span>}
                 </button>
               ))}
@@ -1167,6 +1181,9 @@ function DemoView({
 
       {phase === "form" && (
         <div className="demo-review">
+          <p className="demo-ribbon demo-ribbon-bar" aria-hidden="true">
+            Demo
+          </p>
           <div className="demo-review-top">
             <button className="scanner-icon-btn" type="button" onClick={() => setPhase("pages")} aria-label="Back">
               ×
@@ -1180,6 +1197,9 @@ function DemoView({
           {currentPage && (
             <button type="button" className="demo-review-page compact" onClick={() => setViewerOpen(true)}>
               <img src={currentPage.url} alt="Page to save" />
+              <span className="demo-ribbon demo-ribbon-corner" aria-hidden="true">
+                Demo
+              </span>
             </button>
           )}
           <div className="notice ok">We think this belongs in {suggestedPath("council_tax", period)}. Save here, or change the title.</div>
@@ -1213,6 +1233,7 @@ function DemoView({
       {viewerOpen && pages.length > 0 && (
         <FileViewer
           title={title || "Council Tax 2026–27 (demo)"}
+          demo
           pages={pages.map((page) => ({ url: page.url, image: true }))}
           startAt={activePage}
           onClose={() => setViewerOpen(false)}
@@ -1742,11 +1763,13 @@ function FileViewer({
   pages,
   startAt,
   onClose,
+  demo,
 }: {
   title: string;
   pages: Array<{ url: string; image: boolean }>;
   startAt: number;
   onClose: () => void;
+  demo?: boolean;
 }) {
   const [index, setIndex] = useState(startAt);
   const swipeStart = useRef<{ x: number; y: number } | null>(null);
@@ -1789,7 +1812,12 @@ function FileViewer({
   if (!page) return null;
 
   return createPortal(
-    <div className="file-viewer" role="dialog" aria-modal="true" aria-label={title}>
+    <div className={`file-viewer${demo ? " demo" : ""}`} role="dialog" aria-modal="true" aria-label={title}>
+      {demo && (
+        <p className="demo-ribbon demo-ribbon-bar" aria-hidden="true">
+          Demo
+        </p>
+      )}
       <div className="file-viewer-bar">
         <button className="secondary" type="button" onClick={onClose}>
           Close
@@ -1812,7 +1840,14 @@ function FileViewer({
         }}
       >
         {page.image ? (
-          <img src={page.url} alt={`${title} page ${index + 1}`} draggable={false} />
+          <div className="file-viewer-page">
+            <img src={page.url} alt={`${title} page ${index + 1}`} draggable={false} />
+            {demo && (
+              <span className="demo-ribbon demo-ribbon-corner" aria-hidden="true">
+                Demo
+              </span>
+            )}
+          </div>
         ) : (
           <iframe title={title} src={page.url} />
         )}
@@ -1894,7 +1929,7 @@ function DocumentDetail({
   }, [doc.fileName, doc.id, doc.mimeType, doc.pageCount, doc.storageKind]);
 
   return (
-    <aside className="card doc-detail">
+    <aside className={`card doc-detail${doc.id === DEMO_DOC_ID ? " demo-doc" : ""}`}>
       <p className="kicker">{doc.isCurrent ? "Latest document" : "Earlier copy"}</p>
       <h2>{doc.title}</h2>
       <p className="meta">
@@ -1921,6 +1956,11 @@ function DocumentDetail({
                 ) : (
                   <span className="preview-file">Open the full PDF</span>
                 )}
+                {doc.id === DEMO_DOC_ID && (
+                  <span className="demo-ribbon demo-ribbon-corner" aria-hidden="true">
+                    Demo
+                  </span>
+                )}
               </button>
             ) : (
               <div className="page-rail" aria-label="Document pages">
@@ -1928,6 +1968,11 @@ function DocumentDetail({
                   <figure key={`${doc.id}-page-${index}`} className="page-slide">
                     <button type="button" className="preview-open" onClick={() => setViewerAt(index)}>
                       <img src={page.url} alt={`${doc.title} page ${index + 1}`} />
+                      {doc.id === DEMO_DOC_ID && (
+                        <span className="demo-ribbon demo-ribbon-corner" aria-hidden="true">
+                          Demo
+                        </span>
+                      )}
                     </button>
                     <figcaption>Page {index + 1} of {pages.length}</figcaption>
                   </figure>
@@ -1944,7 +1989,13 @@ function DocumentDetail({
         </>
       )}
       {viewerAt !== null && (
-        <FileViewer title={doc.title} pages={pages} startAt={viewerAt} onClose={() => setViewerAt(null)} />
+        <FileViewer
+          title={doc.title}
+          demo={doc.id === DEMO_DOC_ID}
+          pages={pages}
+          startAt={viewerAt}
+          onClose={() => setViewerAt(null)}
+        />
       )}
       {doc.storageKind === "referenced" && (
         <div className="notice">

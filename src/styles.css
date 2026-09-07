@@ -13,6 +13,9 @@
   --alert: #b85c38;
   --warn: #c4892a;
   --ok: #2f7a58;
+  --demo-red: #c43c2e;
+  --demo-wash: #f3cfc9;
+  --demo-card: #fff0ed;
   --shadow: 0 18px 40px rgba(27, 25, 20, 0.08);
   --radius: 18px;
   --font-ui: "Plus Jakarta Sans", system-ui, sans-serif;
@@ -309,9 +312,66 @@ button {
   border: 0;
   border-radius: 999px;
   padding: 8px 14px;
-  background: #c43c2e;
+  background: var(--demo-red);
   color: #fff;
   font-weight: 800;
+}
+
+.demo-ribbon {
+  margin: 0;
+  pointer-events: none;
+  user-select: none;
+}
+
+.demo-ribbon-bar {
+  flex-shrink: 0;
+  background: var(--demo-red);
+  color: #fff;
+  text-align: center;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  padding: 6px 12px;
+}
+
+.demo-ribbon-corner {
+  position: absolute;
+  top: 12px;
+  right: -34px;
+  width: 118px;
+  padding: 4px 0;
+  background: var(--demo-red);
+  color: #fff;
+  text-align: center;
+  font-size: 0.64rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  transform: rotate(45deg);
+  z-index: 3;
+}
+
+.page-thumb .demo-ribbon-corner {
+  top: 8px;
+  right: -36px;
+  width: 92px;
+  font-size: 0.52rem;
+  padding: 2px 0;
+}
+
+.app.demo-mode {
+  background: #f6ddd9;
+}
+
+.app.demo-mode .main,
+.app.demo-mode .topbar,
+.app.demo-mode .content {
+  background: var(--demo-wash);
+}
+
+.app.demo-mode .demo-menu li {
+  background: var(--demo-card);
 }
 
 .topbar p {
@@ -801,12 +861,14 @@ button {
 }
 
 .preview-open {
+  position: relative;
   display: block;
   width: 100%;
   padding: 0;
   border: 0;
   background: none;
   text-align: left;
+  overflow: hidden;
 }
 
 .preview-open img,
@@ -840,6 +902,18 @@ button {
   display: flex;
   flex-direction: column;
   background: var(--cream);
+}
+
+.file-viewer.demo,
+.file-viewer.demo .file-viewer-bar,
+.file-viewer.demo .file-viewer-nav,
+.file-viewer.demo .file-viewer-body {
+  background: var(--demo-wash);
+}
+
+.file-viewer-page {
+  position: relative;
+  overflow: hidden;
 }
 
 .file-viewer-bar {
@@ -1032,6 +1106,8 @@ button {
 }
 
 .page-thumb {
+  position: relative;
+  overflow: hidden;
   padding: 0;
   border: 2px solid transparent;
   background: none;
@@ -1861,6 +1937,11 @@ button {
   gap: 16px;
 }
 
+.demo-doc {
+  background: var(--demo-card);
+  border-color: #efc4be;
+}
+
 .demo-menu {
   list-style: none;
   margin: 0;
@@ -1973,10 +2054,29 @@ button {
   color: #1b6b3a;
 }
 
+.scanner-screen.demo-scanner {
+  display: flex;
+  flex-direction: column;
+  background: #4a1c18;
+}
+
+.demo-scanner .demo-ribbon-bar {
+  padding-top: calc(6px + env(safe-area-inset-top, 0px));
+  z-index: 4;
+}
+
 .demo-scanner .scanner-preview {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
   touch-action: none;
   user-select: none;
   background: #2a1c12;
+  overflow: hidden;
+}
+
+.demo-scanner .scanner-top {
+  padding-top: 12px;
 }
 
 .demo-scanner-desk {
@@ -2083,10 +2183,15 @@ button {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  background: var(--cream);
+  background: var(--demo-wash);
   color: var(--ink);
-  padding: calc(10px + env(safe-area-inset-top, 0px)) 16px 0;
+  padding: 0 16px 0;
   overflow: hidden;
+}
+
+.demo-review .demo-ribbon-bar {
+  margin: 0 -16px;
+  padding-top: calc(6px + env(safe-area-inset-top, 0px));
 }
 
 .demo-review-top {
@@ -2094,6 +2199,7 @@ button {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+  padding-top: 10px;
 }
 
 .demo-review-top h2 {
@@ -2187,6 +2293,7 @@ button {
   flex-shrink: 0;
   margin: 0 -16px 0;
   padding: 10px 16px calc(14px + env(safe-area-inset-bottom, 0px));
+  background: var(--demo-wash);
 }
 
 .demo-review .scan-pages-actions .primary,
