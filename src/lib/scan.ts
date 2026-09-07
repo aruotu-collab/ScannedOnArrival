@@ -5,6 +5,87 @@ export interface CropInsets {
   left: number;
 }
 
+export const PAPER_CREAM = { r: 255, g: 251, b: 244 };
+const PAPER_HEX = "#fffbf4";
+
+export function bleachDarkBorders(canvas: HTMLCanvasElement): HTMLCanvasElement {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return canvas;
+  const { width, height } = canvas;
+  const image = ctx.getImageData(0, 0, width, height);
+  const data = image.data;
+  const lumaAt = (index: number) => 0.2126 * data[index] + 0.7152 * data[index + 1] + 0.0722 * data[index + 2];
+  const isDark = (index: number) => lumaAt(index) < 48;
+  const paint = (index: number) => {
+    data[index] = PAPER_CREAM.r;
+    data[index + 1] = PAPER_CREAM.g;
+    data[index + 2] = PAPER_CREAM.b;
+    data[index + 3] = 255;
+  };
+
+  const seen = new Uint8Array(width * height);
+  const stack: number[] = [];
+  const enqueue = (x: number, y: number) => {
+    if (x < 0 || y < 0 || x >= width || y >= height) return;
+    const pixel = y * width + x;
+    if (seen[pixel]) return;
+    seen[pixel] = 1;
+    if (isDark(pixel * 4)) stack.push(pixel);
+  };
+  enqueue(0, 0);
+  enqueue(width - 1, 0);
+  enqueue(0, height - 1);
+  enqueue(width - 1, height - 1);
+  enqueue(2, 2);
+  enqueue(width - 3, 2);
+  enqueue(2, height - 3);
+  enqueue(width - 3, height - 3);
+
+  let filled = 0;
+  const cap = Math.round(width * height * 0.16);
+  while (stack.length > 0 && filled < cap) {
+    const pixel = stack.pop();
+    if (pixel === undefined) break;
+    const index = pixel * 4;
+    if (!isDark(index)) continue;
+    paint(index);
+    filled += 1;
+    const x = pixel % width;
+    const y = (pixel - x) / width;
+    enqueue(x - 1, y);
+    enqueue(x + 1, y);
+    enqueue(x, y - 1);
+    enqueue(x, y + 1);
+  }
+
+  const band = Math.max(6, Math.round(Math.min(width, height) * 0.028));
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      if (x >= band && y >= band && x < width - band && y < height - band) continue;
+      const index = (y * width + x) * 4;
+      if (isDark(index)) paint(index);
+    }
+  }
+
+  ctx.putImageData(image, 0, 0);
+  return canvas;
+}
+
+export async function bleachScanBlob(blob: Blob, name = "scan.jpg"): Promise<Blob> {
+  if (!blob.type.startsWith("image/") && blob.type !== "") return blob;
+  const file = blob instanceof File ? blob : new File([blob], name, { type: blob.type || "image/jpeg" });
+  const image = await loadImage(file);
+  const canvas = document.createElement("canvas");
+  canvas.width = image.naturalWidth;
+  canvas.height = image.naturalHeight;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return blob;
+  ctx.drawImage(image, 0, 0);
+  bleachDarkBorders(canvas);
+  const cleaned = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.93));
+  return cleaned ?? blob;
+}
+
 function loadImage(file: File): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
@@ -74,6 +155,7 @@ export async function enhanceDocument(file: File): Promise<File> {
     data[i + 2] = Math.max(0, Math.min(255, ((data[i + 2] - min) / range) * 255));
   }
   ctx.putImageData(pixels, 0, 0);
+  bleachDarkBorders(canvas);
   return canvasToFile(canvas, file.name.replace(/(\.\w+)?$/, "-scan.jpg"));
 }
 
@@ -88,7 +170,7 @@ export async function stitchImages(files: File[]): Promise<File> {
   canvas.height = heights.reduce((sum, height) => sum + height, 0) + gap * (images.length - 1);
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("Could not join those pages.");
-  ctx.fillStyle = "#fffbf4";
+  ctx.fillStyle = PAPER_HEX;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   let y = 0;
   images.forEach((image, index) => {

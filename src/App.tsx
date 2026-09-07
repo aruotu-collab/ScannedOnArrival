@@ -28,7 +28,7 @@ import { buildBackup, downloadBackup, parseBackupFile, restoreBackup } from "./l
 import { enableNotifications, listAttention, maybeNotify, type AttentionItem } from "./lib/reminders";
 import { classifySmart } from "./lib/openai";
 import { flattenImageFile } from "./lib/detect";
-import { cropImageFile, enhanceDocument, type CropInsets } from "./lib/scan";
+import { bleachScanBlob, cropImageFile, enhanceDocument, type CropInsets } from "./lib/scan";
 import { ScannerScreen } from "./scanner/ScannerScreen";
 import {
   clearAllData,
@@ -383,6 +383,7 @@ export default function App() {
         ? { ...d, isCurrent: false, supersededBy: id }
         : d,
     );
+    const pageFiles = draft.files?.length ? draft.files : draft.file ? [draft.file] : [];
     const record: DocumentRecord = {
       id,
       title: draft.title,
@@ -399,17 +400,16 @@ export default function App() {
       locationProvider: draft.locationProvider,
       fileName: draft.fileName,
       mimeType: draft.mimeType,
-      pageCount: draft.files && draft.files.length > 1 ? draft.files.length : undefined,
+      pageCount: pageFiles.length > 0 ? pageFiles.length : undefined,
       isCurrent: makeCurrent || sameType.every((d) => !d.isCurrent),
     };
     const saved = [record, ...nextDocs];
-    await persistDocs(saved);
-    const pageFiles = draft.files?.length ? draft.files : draft.file ? [draft.file] : [];
     if (draft.storageKind === "stored") {
       for (let index = 0; index < pageFiles.length; index += 1) {
         await saveFileBlob({ id: pageBlobId(id, index), documentId: id, blob: pageFiles[index] });
       }
     }
+    await persistDocs(saved);
     setAddOpen(false);
     setIncomingFile(null);
     setAddStart("choose");
@@ -1051,21 +1051,42 @@ function DocumentDetail({
 }) {
   const [pages, setPages] = useState<Array<{ url: string; image: boolean }>>([]);
   const [viewerAt, setViewerAt] = useState<number | null>(null);
+  const [pagesLoading, setPagesLoading] = useState(doc.storageKind === "stored");
 
   useEffect(() => {
     let urls: string[] = [];
     let alive = true;
+    const expected = Math.max(1, doc.pageCount ?? 1);
     (async () => {
-      if (doc.storageKind !== "stored") return;
-      const blobs = await loadDocumentPages(doc.id, doc.pageCount ?? 1);
-      if (!alive || blobs.length === 0) return;
-      urls = blobs.map((blob) => URL.createObjectURL(blob));
-      setPages(
-        blobs.map((blob, index) => ({
-          url: urls[index],
-          image: isVisualImage(blob.type || doc.mimeType, doc.fileName),
-        })),
-      );
+      if (doc.storageKind !== "stored") {
+        setPagesLoading(false);
+        return;
+      }
+      setPagesLoading(true);
+      for (let attempt = 0; attempt < 8 && alive; attempt += 1) {
+        const blobs = await loadDocumentPages(doc.id, expected);
+        if (!alive) return;
+        if (blobs.length >= expected) {
+          const cleaned = await Promise.all(
+            blobs.map((blob) =>
+              isVisualImage(blob.type || doc.mimeType, doc.fileName) ? bleachScanBlob(blob) : Promise.resolve(blob),
+            ),
+          );
+          if (!alive) return;
+          urls.forEach((url) => URL.revokeObjectURL(url));
+          urls = cleaned.map((blob) => URL.createObjectURL(blob));
+          setPages(
+            cleaned.map((blob, index) => ({
+              url: urls[index],
+              image: isVisualImage(blob.type || doc.mimeType, doc.fileName),
+            })),
+          );
+          setPagesLoading(false);
+          return;
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 180));
+      }
+      if (alive) setPagesLoading(false);
     })();
     return () => {
       alive = false;
@@ -1086,6 +1107,11 @@ function DocumentDetail({
         <span className={`badge ${computeStatus(doc)}`}>{computeStatus(doc)}</span>
         <span className={`badge ${doc.storageKind}`}>{storageVerb(doc)}</span>
       </div>
+      {pagesLoading && pages.length === 0 && (
+        <div className="preview preview-loading" role="status">
+          Opening the scan…
+        </div>
+      )}
       {pages.length > 0 && (
         <>
           <div className={`preview ${pages.length > 1 ? "preview-pages" : ""}`} style={{ marginBottom: 12 }}>

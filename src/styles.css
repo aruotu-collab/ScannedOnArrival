@@ -623,7 +623,7 @@ button {
 
 .preview {
   min-height: 280px;
-  background: #efe7d7;
+  background: var(--cream);
   border-radius: 18px;
   display: grid;
   place-items: center;
@@ -664,6 +664,12 @@ button {
 .preview-full-btn {
   width: 100%;
   margin-bottom: 10px;
+}
+
+.preview-loading {
+  min-height: 180px;
+  font-weight: 700;
+  color: var(--forest);
 }
 
 .file-viewer {
@@ -770,7 +776,7 @@ button {
   position: relative;
   overflow: hidden;
   border-radius: 16px;
-  box-shadow: inset 0 0 0 2px rgba(247, 241, 228, 0.16);
+  box-shadow: none;
 }
 
 .camera-wrap.locked {

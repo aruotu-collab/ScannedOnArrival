@@ -9,6 +9,7 @@ import {
   type Quad,
 } from "../scanner/geometry";
 import { scannerConfig } from "../scanner/scannerConfig";
+import { bleachDarkBorders, PAPER_CREAM } from "./scan";
 
 export type { Point, Quad };
 
@@ -77,7 +78,7 @@ type OpenCV = {
     border: number,
     scalar?: unknown,
   ) => void;
-  Scalar?: new () => unknown;
+  Scalar?: new (v0?: number, v1?: number, v2?: number, v3?: number) => unknown;
   imshow: (canvas: HTMLCanvasElement, mat: CvMat) => void;
   onRuntimeInitialized?: () => void;
 };
@@ -341,7 +342,7 @@ function expandQuad(quad: Quad, amount: number): Quad {
 
 function warpPaper(source: HTMLCanvasElement, quad: Quad): HTMLCanvasElement {
   const api = opencv();
-  const padded = expandQuad(quad, 0.035);
+  const padded = expandQuad(quad, 0.012);
   const width = Math.max(
     32,
     Math.round(Math.max(dist(padded.topLeft, padded.topRight), dist(padded.bottomLeft, padded.bottomRight))),
@@ -376,17 +377,29 @@ function warpPaper(source: HTMLCanvasElement, quad: Quad): HTMLCanvasElement {
   paper.width = outW;
   paper.height = outH;
   try {
-    api.warpPerspective(src, warped, matrix, new api.Size(outW, outH), api.INTER_LINEAR, api.BORDER_REPLICATE);
+    const cream = api.Scalar
+      ? new api.Scalar(PAPER_CREAM.r, PAPER_CREAM.g, PAPER_CREAM.b, 255)
+      : undefined;
+    api.warpPerspective(
+      src,
+      warped,
+      matrix,
+      new api.Size(outW, outH),
+      api.INTER_LINEAR,
+      api.BORDER_CONSTANT,
+      cream,
+    );
     api.imshow(paper, warped);
+    bleachDarkBorders(paper);
     const canvas = document.createElement("canvas");
     canvas.width = outW + padSide * 2;
     canvas.height = outH + padTop + padBottom;
     const ctx = canvas.getContext("2d");
     if (!ctx) return paper;
-    ctx.fillStyle = "#fffbf4";
+    ctx.fillStyle = `rgb(${PAPER_CREAM.r}, ${PAPER_CREAM.g}, ${PAPER_CREAM.b})`;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(paper, padSide, padTop);
-    return canvas;
+    return bleachDarkBorders(canvas);
   } finally {
     src.delete();
     warped.delete();
