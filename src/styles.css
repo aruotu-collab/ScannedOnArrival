@@ -2029,6 +2029,15 @@ button {
   color: #f7f1e4;
 }
 
+.expiry-switch {
+  width: fit-content;
+}
+
+.expiry-switch button {
+  padding: 6px 12px;
+  font-size: 0.85rem;
+}
+
 .list {
   display: flex;
   flex-direction: column;

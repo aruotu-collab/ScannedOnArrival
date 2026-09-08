@@ -3086,6 +3086,7 @@ function AddDocumentModal({
   const [newType, setNewType] = useState("");
   const [creatingType, setCreatingType] = useState(false);
   const [viewingPage, setViewingPage] = useState(false);
+  const [expiryMode, setExpiryMode] = useState<"na" | "date">("na");
   const ingested = useRef(false);
 
   const intendedType = intendedTypeId ? typeById(intendedTypeId) : null;
@@ -3105,6 +3106,7 @@ function AddDocumentModal({
       locationLabel: defaultLocation(method, storageKind),
       locationProvider: storageKind === "stored" ? "local" : "icloud",
     });
+    setExpiryMode("na");
     if (method === "camera") setStep("camera");
     else if (method === "reference") setStep("form");
   };
@@ -3202,6 +3204,7 @@ function AddDocumentModal({
         mimeType: pagesToStore[0].type,
       });
       setDraft(next);
+      setExpiryMode(next.expiresOn ? "date" : "na");
       const reviewFirst = method === "email-forward";
       const canAuto =
         !reviewFirst && method !== "camera" && classified.typeId !== "other" && classified.confidence !== "low" && !intendedType;
@@ -3311,7 +3314,7 @@ function AddDocumentModal({
 
   const submit = async (makeCurrent: boolean) => {
     if (!draft) return;
-    await onSave(draft, makeCurrent);
+    await onSave(expiryMode === "na" ? { ...draft, expiresOn: "" } : draft, makeCurrent);
   };
 
   const continueFromForm = () => {
@@ -3719,7 +3722,32 @@ function AddDocumentModal({
               </label>
               <label className="field" style={{ flex: 1 }}>
                 <span>Expires</span>
-                <input type="date" value={draft.expiresOn} onChange={(e) => setDraft({ ...draft, expiresOn: e.target.value })} />
+                <div className="switch expiry-switch">
+                  <button
+                    type="button"
+                    className={expiryMode === "na" ? "active" : ""}
+                    onClick={() => {
+                      setExpiryMode("na");
+                      setDraft({ ...draft, expiresOn: "" });
+                    }}
+                  >
+                    N/A
+                  </button>
+                  <button
+                    type="button"
+                    className={expiryMode === "date" ? "active" : ""}
+                    onClick={() => setExpiryMode("date")}
+                  >
+                    Date
+                  </button>
+                </div>
+                {expiryMode === "date" && (
+                  <input
+                    type="date"
+                    value={draft.expiresOn}
+                    onChange={(e) => setDraft({ ...draft, expiresOn: e.target.value })}
+                  />
+                )}
               </label>
             </div>
             <label className="field">
