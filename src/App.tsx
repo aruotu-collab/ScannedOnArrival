@@ -307,6 +307,11 @@ export default function App() {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [inbox, setInbox] = useState<InboxItem[]>([]);
   const [foundEmail, setFoundEmail] = useState<FoundEmailDoc[]>([]);
+  const [mailboxPreview, setMailboxPreview] = useState<{
+    item: FoundEmailDoc;
+    pages: Array<{ url: string; image: boolean }>;
+  } | null>(null);
+  const mailboxFiles = useRef(new Map<string, File>());
   const [view, setView] = useState<ViewId>("documents");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [expandedTypeId, setExpandedTypeId] = useState<string | null>(null);
@@ -767,17 +772,68 @@ export default function App() {
     setToast("Hidden from the next look");
   };
 
+  const closeMailboxPreview = () => {
+    setMailboxPreview((current) => {
+      current?.pages.forEach((page) => URL.revokeObjectURL(page.url));
+      return null;
+    });
+  };
+
+  const loadMailboxFile = async (item: FoundEmailDoc): Promise<File | null> => {
+    const key = mailboxRef(item);
+    const cached = mailboxFiles.current.get(key);
+    if (cached) return cached;
+    const file =
+      item.mailbox === "gmail" ? await downloadGmailAttachment(item) : await downloadOutlookAttachment(item);
+    if (file) mailboxFiles.current.set(key, file);
+    return file;
+  };
+
+  const pagesFromMailboxFile = async (file: File): Promise<Array<{ url: string; image: boolean }>> => {
+    if (isImage(file) || isVisualImage(file.type, file.name)) {
+      return [{ url: URL.createObjectURL(file), image: true }];
+    }
+    if (isPdf(file) || (await blobLooksLikePdf(file))) {
+      const rendered = await renderPdfPages(file);
+      return rendered.map((page) => ({ url: URL.createObjectURL(page), image: true }));
+    }
+    return [{ url: URL.createObjectURL(file), image: false }];
+  };
+
+  const viewFromMailbox = async (item: FoundEmailDoc) => {
+    if (inboxBusyId) return;
+    setInboxBusyId(item.id);
+    setInboxBusyKind("mailbox");
+    try {
+      const file = await loadMailboxFile(item);
+      if (!file) {
+        setToast("Could not download that attachment yet");
+        return;
+      }
+      const pages = await pagesFromMailboxFile(file);
+      setMailboxPreview((current) => {
+        current?.pages.forEach((page) => URL.revokeObjectURL(page.url));
+        return { item, pages };
+      });
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Could not open that attachment.");
+    } finally {
+      setInboxBusyId(null);
+      setInboxBusyKind(null);
+    }
+  };
+
   const addFromMailbox = async (item: FoundEmailDoc) => {
     if (inboxBusyId) return;
     setInboxBusyId(item.id);
     setInboxBusyKind("mailbox");
     try {
-      const file =
-        item.mailbox === "gmail" ? await downloadGmailAttachment(item) : await downloadOutlookAttachment(item);
+      const file = await loadMailboxFile(item);
       if (!file) {
         setToast("Could not download that attachment yet");
         return;
       }
+      closeMailboxPreview();
       setPendingInboxItem(null);
       setPendingFoundItem(item);
       setIncomingFile(file);
@@ -1005,6 +1061,7 @@ export default function App() {
               onDisconnectGmail={() => void disconnectMailbox("gmail")}
               onDisconnectOutlook={() => void disconnectMailbox("outlook")}
               onAddFound={addFromMailbox}
+              onViewFound={(item) => void viewFromMailbox(item)}
               onSkipFound={(item) => void skipFoundMailbox(item)}
               gmailReady={gmailConnectAvailable()}
               outlookReady={outlookConnectAvailable()}
@@ -1099,6 +1156,18 @@ export default function App() {
           onSave={addDocument}
           onCreateCategory={createCategory}
           onCreateType={createType}
+        />
+      )}
+      {mailboxPreview && (
+        <FileViewer
+          title={mailboxPreview.item.title}
+          pages={mailboxPreview.pages}
+          startAt={0}
+          onClose={closeMailboxPreview}
+          primaryAction={{
+            label: "Add this file",
+            onClick: () => void addFromMailbox(mailboxPreview.item),
+          }}
         />
       )}
       {toast && <div className="toast">{toast}</div>}
@@ -2098,12 +2167,14 @@ function FileViewer({
   startAt,
   onClose,
   demo,
+  primaryAction,
 }: {
   title: string;
   pages: Array<{ url: string; image: boolean }>;
   startAt: number;
   onClose: () => void;
   demo?: boolean;
+  primaryAction?: { label: string; onClick: () => void };
 }) {
   const [index, setIndex] = useState(startAt);
   const [view, setView] = useState<ViewerPan>(VIEWER_IDENTITY);
@@ -2289,7 +2360,7 @@ function FileViewer({
         <button className="secondary" type="button" onClick={onClose}>
           Close
         </button>
-        <div>
+        <div className="file-viewer-heading">
           <strong>{title}</strong>
           <p className="meta">
             {pages.length > 1
@@ -2299,6 +2370,11 @@ function FileViewer({
                 : "Open the file, then pinch to enlarge"}
           </p>
         </div>
+        {primaryAction && (
+          <button className="primary" type="button" onClick={primaryAction.onClick}>
+            {primaryAction.label}
+          </button>
+        )}
       </div>
       <div
         ref={bodyRef}
@@ -2848,6 +2924,7 @@ function InboxView({
   confirmingId,
   busyKind,
   onAddFound,
+  onViewFound,
   onSkipFound,
   onAddMail,
   onConnectGmail,
@@ -2871,6 +2948,7 @@ function InboxView({
   confirmingId: string | null;
   busyKind: "confirm" | "remove" | "mailbox" | null;
   onAddFound: (item: FoundEmailDoc) => Promise<void>;
+  onViewFound: (item: FoundEmailDoc) => void;
   onSkipFound: (item: FoundEmailDoc) => void;
   onAddMail: (file: File) => void;
   onConnectGmail: () => void;
@@ -3093,7 +3171,7 @@ function InboxView({
           <div className="found-email-list">
             <h3>From this look</h3>
             <p className="meta">
-              Files you Add stay in your index. Look again only brings new ones. Skip hides a file you do not want.
+              View a file before you file it. Add puts it in your index. Skip hides it from the next look.
             </p>
             <div className="switch found-email-tabs" role="tablist" aria-label="Found email documents">
               <button
@@ -3125,22 +3203,37 @@ function InboxView({
               )}
               {foundShown.map((item) => (
                 <div key={item.id} className="found-email-item">
-                  <div className="found-email-copy">
+                  <button
+                    type="button"
+                    className="found-email-copy"
+                    disabled={confirmingId !== null}
+                    onClick={() => onViewFound(item)}
+                  >
                     <strong>{item.title}</strong>
                     <p className="meta">
-                      {item.mailbox === "gmail" ? "Gmail" : "Outlook"}
+                      {confirmingId === item.id && busyKind === "mailbox"
+                        ? "Opening…"
+                        : "Tap to view"}
                       {item.attachmentName ? ` · ${item.attachmentName}` : ""}
                       {item.period ? ` · ${item.period}` : ""}
                     </p>
-                  </div>
+                  </button>
                   {foundMailTab === "add" ? (
                     <div className="found-email-actions">
+                      <button
+                        className="secondary"
+                        type="button"
+                        disabled={confirmingId !== null}
+                        onClick={() => onViewFound(item)}
+                      >
+                        {confirmingId === item.id && busyKind === "mailbox" ? "Opening…" : "View"}
+                      </button>
                       <button
                         className="primary"
                         disabled={confirmingId !== null}
                         onClick={() => void onAddFound(item)}
                       >
-                        {confirmingId === item.id && busyKind === "mailbox" ? "Opening…" : "Add"}
+                        Add
                       </button>
                       <button
                         className="secondary"

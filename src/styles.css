@@ -1130,6 +1130,11 @@ button {
   display: block;
 }
 
+.file-viewer-heading {
+  min-width: 0;
+  flex: 1;
+}
+
 .file-viewer-bar .meta {
   margin: 2px 0 0;
 }
@@ -2078,6 +2083,19 @@ button {
 
 .found-email-copy {
   min-width: 0;
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.found-email-copy:disabled {
+  cursor: wait;
 }
 
 .found-email-copy strong,
