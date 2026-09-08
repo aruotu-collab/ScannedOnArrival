@@ -13,14 +13,15 @@ export function guidanceFromDetection(
   stable: boolean,
 ): Guidance {
   const { minArea, maxArea, centreTolerance } = scannerConfig.geometry;
-  const { minConfidence } = scannerConfig.detection;
+  const { keepCandidate, minConfidence } = scannerConfig.detection;
 
-  if (!metrics || confidence < minConfidence) {
-    return { message: "Find the document", ready: false, reason: "no-document" };
+  if (!metrics || confidence < keepCandidate) {
+    return { message: "Fit the whole page in the frame", ready: false, reason: "no-document" };
   }
   if (metrics.clipped || metrics.edgeCompleteness < 1) {
     return {
-      message: metrics.areaRatio > maxArea - 0.04 ? "Move further away" : "Show all 4 corners",
+      message:
+        metrics.areaRatio > maxArea - 0.08 ? "Move further away" : "Step back so all four corners are in view",
       ready: false,
       reason: "clipped",
     };
@@ -47,6 +48,9 @@ export function guidanceFromDetection(
   }
   if (metrics.perspectiveScore < scannerConfig.geometry.minPerspective) {
     return { message: "Hold phone parallel", ready: false, reason: "perspective" };
+  }
+  if (confidence < minConfidence) {
+    return { message: "Hold steady", ready: false, reason: "weak" };
   }
   if (!stable) {
     return { message: "Hold steady", ready: false, reason: "motion" };

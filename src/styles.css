@@ -1109,7 +1109,9 @@ button {
 
 .file-viewer-page {
   position: relative;
-  overflow: hidden;
+  overflow: visible;
+  transform-origin: 0 0;
+  will-change: transform;
 }
 
 .file-viewer-bar {
@@ -1133,8 +1135,14 @@ button {
   flex: 1;
   overflow: auto;
   -webkit-overflow-scrolling: touch;
-  touch-action: pan-y;
+  touch-action: pan-y pinch-zoom;
+  overscroll-behavior: contain;
   background: var(--cream);
+}
+
+.file-viewer-body.zoomable {
+  overflow: hidden;
+  touch-action: none;
 }
 
 .file-viewer-body.swipeable {
@@ -1149,6 +1157,9 @@ button {
   display: block;
   width: 100%;
   height: auto;
+  pointer-events: none;
+  -webkit-user-drag: none;
+  user-select: none;
 }
 
 .file-viewer-body iframe {

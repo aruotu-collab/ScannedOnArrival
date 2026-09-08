@@ -1822,6 +1822,35 @@ function isVisualImage(mimeType?: string, fileName?: string) {
   return /\.(jpe?g|png|gif|webp|heic)$/i.test(fileName || "");
 }
 
+type ViewerPoint = { x: number; y: number };
+type ViewerPan = { scale: number; x: number; y: number };
+
+const VIEWER_MIN_ZOOM = 1;
+const VIEWER_MAX_ZOOM = 5;
+const VIEWER_IDENTITY: ViewerPan = { scale: 1, x: 0, y: 0 };
+
+function clampViewerPan(next: ViewerPan, frame: HTMLElement | null): ViewerPan {
+  const scale = Math.min(VIEWER_MAX_ZOOM, Math.max(VIEWER_MIN_ZOOM, next.scale));
+  if (!frame) return { scale, x: 0, y: 0 };
+  const page = frame.querySelector(".file-viewer-page") as HTMLElement | null;
+  const extraX = Math.max(0, (page?.offsetWidth ?? frame.clientWidth) * scale - frame.clientWidth);
+  const extraY = Math.max(0, (page?.offsetHeight ?? frame.clientHeight) * scale - frame.clientHeight);
+  return {
+    scale,
+    x: extraX === 0 ? 0 : Math.min(0, Math.max(-extraX, next.x)),
+    y: extraY === 0 ? 0 : Math.min(0, Math.max(-extraY, next.y)),
+  };
+}
+
+function zoomViewerAround(current: ViewerPan, nextScale: number, origin: ViewerPoint): ViewerPan {
+  const scale = Math.min(VIEWER_MAX_ZOOM, Math.max(VIEWER_MIN_ZOOM, nextScale));
+  return {
+    scale,
+    x: origin.x - ((origin.x - current.x) / current.scale) * scale,
+    y: origin.y - ((origin.y - current.y) / current.scale) * scale,
+  };
+}
+
 function FileViewer({
   title,
   pages,
@@ -1836,11 +1865,34 @@ function FileViewer({
   demo?: boolean;
 }) {
   const [index, setIndex] = useState(startAt);
-  const swipeStart = useRef<{ x: number; y: number } | null>(null);
+  const [view, setView] = useState<ViewerPan>(VIEWER_IDENTITY);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const viewRef = useRef<ViewerPan>(VIEWER_IDENTITY);
+  const pointersRef = useRef(new Map<number, ViewerPoint>());
+  const pinchRef = useRef<{ dist: number; view: ViewerPan; mid: ViewerPoint } | null>(null);
+  const dragRef = useRef<{ id: number; x: number; y: number; vx: number; vy: number } | null>(null);
+  const swipeStart = useRef<ViewerPoint | null>(null);
+  const movedRef = useRef(false);
+  const pinchedRef = useRef(false);
+  const lastTapRef = useRef<{ t: number; x: number; y: number } | null>(null);
   const page = pages[index];
+  const zoomed = view.scale > 1.02;
+
+  const applyView = (next: ViewerPan) => {
+    const clamped = clampViewerPan(next, bodyRef.current);
+    viewRef.current = clamped;
+    setView(clamped);
+  };
+
+  const resetView = () => applyView(VIEWER_IDENTITY);
 
   const goTo = (next: number) => {
-    setIndex(Math.max(0, Math.min(pages.length - 1, next)));
+    const clamped = Math.max(0, Math.min(pages.length - 1, next));
+    if (clamped === index) return;
+    setIndex(clamped);
+    viewRef.current = VIEWER_IDENTITY;
+    setView(VIEWER_IDENTITY);
+    pinchedRef.current = false;
   };
 
   useEffect(() => {
@@ -1858,19 +1910,129 @@ function FileViewer({
     };
   }, [index, onClose, pages.length]);
 
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el || !page?.image) return;
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      const current = viewRef.current;
+      if (event.ctrlKey || event.metaKey) {
+        const rect = el.getBoundingClientRect();
+        applyView(
+          zoomViewerAround(
+            current,
+            current.scale * (event.deltaY < 0 ? 1.08 : 1 / 1.08),
+            { x: event.clientX - rect.left, y: event.clientY - rect.top },
+          ),
+        );
+        return;
+      }
+      applyView({ ...current, y: current.y - event.deltaY, x: current.x - event.deltaX });
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [page?.image]);
+
+  const pointerList = () => [...pointersRef.current.values()];
+
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
-    if (pages.length < 2) return;
-    swipeStart.current = { x: event.clientX, y: event.clientY };
+    if (!page?.image) return;
+    if ((event.target as HTMLElement | null)?.closest("button")) return;
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      /* capture is optional on some browsers */
+    }
+    pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    movedRef.current = false;
+    const points = pointerList();
+    if (points.length === 2) {
+      const rect = event.currentTarget.getBoundingClientRect();
+      pinchRef.current = {
+        dist: Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y),
+        view: viewRef.current,
+        mid: {
+          x: (points[0].x + points[1].x) / 2 - rect.left,
+          y: (points[0].y + points[1].y) / 2 - rect.top,
+        },
+      };
+      dragRef.current = null;
+      swipeStart.current = null;
+      pinchedRef.current = true;
+      return;
+    }
+    dragRef.current = {
+      id: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      vx: viewRef.current.x,
+      vy: viewRef.current.y,
+    };
+    if (pages.length > 1 && viewRef.current.scale <= 1.02) {
+      swipeStart.current = { x: event.clientX, y: event.clientY };
+    } else {
+      swipeStart.current = null;
+    }
   };
 
-  const onPointerUp = (event: PointerEvent<HTMLDivElement>) => {
+  const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
+    if (!pointersRef.current.has(event.pointerId)) return;
+    pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    const points = pointerList();
+    if (points.length >= 2 && pinchRef.current) {
+      const dist = Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
+      const ratio = dist / Math.max(40, pinchRef.current.dist);
+      movedRef.current = true;
+      applyView(zoomViewerAround(pinchRef.current.view, pinchRef.current.view.scale * ratio, pinchRef.current.mid));
+      return;
+    }
+    const drag = dragRef.current;
+    if (!drag || drag.id !== event.pointerId) return;
+    const dx = event.clientX - drag.x;
+    const dy = event.clientY - drag.y;
+    if (Math.hypot(dx, dy) > 8) movedRef.current = true;
+    if (viewRef.current.scale > 1.02 || Math.abs(dy) > Math.abs(dx)) {
+      applyView({ ...viewRef.current, x: drag.vx + dx, y: drag.vy + dy });
+    }
+  };
+
+  const finishPointer = (event: PointerEvent<HTMLDivElement>) => {
     const start = swipeStart.current;
+    pointersRef.current.delete(event.pointerId);
+    if (dragRef.current?.id === event.pointerId) dragRef.current = null;
+    if (pointersRef.current.size < 2) pinchRef.current = null;
+    if (pointersRef.current.size > 0) return;
+
+    const shouldSwipe =
+      Boolean(start) &&
+      pages.length > 1 &&
+      viewRef.current.scale <= 1.02 &&
+      !pinchedRef.current &&
+      movedRef.current;
+    if (shouldSwipe && start) {
+      const dx = event.clientX - start.x;
+      const dy = event.clientY - start.y;
+      if (Math.abs(dx) >= 48 && Math.abs(dx) > Math.abs(dy)) {
+        swipeStart.current = null;
+        goTo(index + (dx < 0 ? 1 : -1));
+        return;
+      }
+    }
     swipeStart.current = null;
-    if (!start || pages.length < 2) return;
-    const dx = event.clientX - start.x;
-    const dy = event.clientY - start.y;
-    if (Math.abs(dx) < 48 || Math.abs(dx) <= Math.abs(dy)) return;
-    goTo(index + (dx < 0 ? 1 : -1));
+    pinchedRef.current = pointersRef.current.size >= 2;
+
+    if (movedRef.current) return;
+    const now = Date.now();
+    const prev = lastTapRef.current;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const tap = { t: now, x: event.clientX - rect.left, y: event.clientY - rect.top };
+    if (prev && now - prev.t < 280 && Math.hypot(tap.x - prev.x, tap.y - prev.y) < 36) {
+      lastTapRef.current = null;
+      if (viewRef.current.scale > 1.05) resetView();
+      else applyView(zoomViewerAround(viewRef.current, 2.4, tap));
+      return;
+    }
+    lastTapRef.current = tap;
   };
 
   if (!page) return null;
@@ -1888,24 +2050,34 @@ function FileViewer({
         </button>
         <div>
           <strong>{title}</strong>
-          {pages.length > 1 && (
-            <p className="meta">
-              Page {index + 1} of {pages.length} · swipe or drag sideways
-            </p>
-          )}
+          <p className="meta">
+            {pages.length > 1
+              ? `Page ${index + 1} of ${pages.length} · pinch to enlarge · swipe for another page`
+              : page.image
+                ? "Pinch or double-tap to enlarge the text"
+                : "Open the file, then pinch to enlarge"}
+          </p>
         </div>
       </div>
       <div
-        className={`file-viewer-body ${pages.length > 1 ? "swipeable" : ""}`}
+        ref={bodyRef}
+        className={`file-viewer-body${pages.length > 1 && !zoomed ? " swipeable" : ""}${page.image ? " zoomable" : ""}`}
         onPointerDown={onPointerDown}
-        onPointerUp={onPointerUp}
-        onPointerCancel={() => {
-          swipeStart.current = null;
-        }}
+        onPointerMove={onPointerMove}
+        onPointerUp={finishPointer}
+        onPointerCancel={finishPointer}
       >
         {page.image ? (
-          <div className="file-viewer-page">
-            <img src={page.url} alt={`${title} page ${index + 1}`} draggable={false} />
+          <div
+            className="file-viewer-page"
+            style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})` }}
+          >
+            <img
+              src={page.url}
+              alt={`${title} page ${index + 1}`}
+              draggable={false}
+              onLoad={() => applyView(viewRef.current)}
+            />
             {demo && (
               <span className="demo-ribbon demo-ribbon-corner" aria-hidden="true">
                 Demo

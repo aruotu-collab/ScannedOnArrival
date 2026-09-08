@@ -21,7 +21,7 @@ export class DocumentTracker {
   private lastAccepted: Quad | null = null;
   private misses = 0;
   private stableFrames = 0;
-  private heldMessage = "Find the document";
+  private heldMessage = "Fit the whole page in the frame";
   private pendingMessage = "";
   private pendingCount = 0;
 
@@ -30,7 +30,7 @@ export class DocumentTracker {
     this.lastAccepted = null;
     this.misses = 0;
     this.stableFrames = 0;
-    this.heldMessage = "Find the document";
+    this.heldMessage = "Fit the whole page in the frame";
     this.pendingMessage = "";
     this.pendingCount = 0;
   }
@@ -45,7 +45,7 @@ export class DocumentTracker {
     }
 
     const previous = this.lastAccepted;
-    if (accepted && confidence >= scannerConfig.detection.minConfidence) {
+    if (accepted && confidence >= scannerConfig.detection.keepCandidate) {
       this.misses = 0;
       this.smoothed = this.smoothed ? lerpQuad(this.smoothed, accepted, smoothAlpha) : accepted;
       this.lastAccepted = accepted;
@@ -64,7 +64,7 @@ export class DocumentTracker {
     const currentlyStable = Boolean(accepted && movement < diagonal * scannerConfig.tracking.stableFraction);
     this.stableFrames = currentlyStable ? this.stableFrames + 1 : 0;
     const stable = this.stableFrames >= stableFrames;
-    const shownConfidence = corners ? Math.max(confidence, scannerConfig.detection.minConfidence) : confidence;
+    const shownConfidence = corners ? Math.max(confidence, scannerConfig.detection.keepCandidate) : confidence;
     const rawGuidance = guidanceFromDetection(metrics, corners ? shownConfidence : 0, stable);
     const guidance = { ...rawGuidance, message: this.holdMessage(rawGuidance.message) };
 

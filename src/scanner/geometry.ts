@@ -103,7 +103,7 @@ export function analyzeQuad(quad: Quad, width: number, height: number, edgeMargi
   const longEdge = Math.max(top, bottom, left, right);
   const shortEdge = Math.max(1, Math.min(top, bottom, left, right));
   const aspect = longEdge / shortEdge;
-  const paperLike = aspect >= 1.15 && aspect <= 2.6 ? 1 : aspect >= 1.05 && aspect <= 3.2 ? 0.65 : 0.25;
+  const paperLike = aspect >= 1.12 && aspect <= 2.8 ? 1 : aspect >= 1.02 && aspect <= 3.6 ? 0.7 : 0.3;
   const inset = [quad.topLeft, quad.topRight, quad.bottomLeft, quad.bottomRight].map(
     (point) =>
       point.x > width * edgeMargin &&
@@ -126,11 +126,15 @@ export function analyzeQuad(quad: Quad, width: number, height: number, edgeMargi
 
 export function scoreDocumentCandidate(metrics: DocumentMetrics): number {
   const areaScore =
-    metrics.areaRatio < 0.1 || metrics.areaRatio > 0.96
+    metrics.areaRatio < 0.06
       ? 0
-      : metrics.areaRatio >= 0.35 && metrics.areaRatio <= 0.85
-        ? 1
-        : 0.55;
+      : metrics.areaRatio > 0.995
+        ? 0.2
+        : metrics.areaRatio >= 0.28 && metrics.areaRatio <= 0.9
+          ? 1
+          : metrics.areaRatio > 0.9
+            ? 0.55
+            : 0.5;
   const centreScore = 1 - Math.min(1, Math.hypot(metrics.centreOffsetX, metrics.centreOffsetY) * 2.2);
   return (
     0.28 * areaScore +

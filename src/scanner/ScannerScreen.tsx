@@ -38,7 +38,7 @@ export function ScannerScreen({
 
   const [gate, setGate] = useState<"explain" | "live" | "error">(hasCameraConsent() ? "live" : "explain");
   const [error, setError] = useState<string | null>(null);
-  const [hint, setHint] = useState("Find the document");
+  const [hint, setHint] = useState("Fit the whole page in the frame");
   const [locked, setLocked] = useState(false);
   const [torchOn, setTorchOn] = useState(false);
   const [torchAvailable, setTorchAvailable] = useState(false);
@@ -78,7 +78,7 @@ export function ScannerScreen({
     let lastDetect = 0;
     trackerRef.current.reset();
     void loadOpenCV().catch(() => {
-      if (alive) setHint("Find the document");
+      if (alive) setHint("Fit the whole page in the frame");
     });
 
     const tick = (now: number) => {
@@ -113,7 +113,7 @@ export function ScannerScreen({
             clipped: tracked.metrics?.clipped,
           });
         } catch {
-          setHint("Find the document");
+          setHint("Fit the whole page in the frame");
         }
       }
       raf = requestAnimationFrame(tick);
@@ -185,8 +185,8 @@ export function ScannerScreen({
           <p className="scanner-kicker">Private scan • processed on this device</p>
           <h2>Use your camera to scan documents</h2>
           <p>
-            Point your phone at a letter on a contrasting table. Your document stays on this device — it is not
-            uploaded.
+            Point your phone at a letter on a contrasting table. If the page is larger than A4, step back until
+            every corner is in the frame. Your document stays on this device — it is not uploaded.
           </p>
           {error && <p className="scanner-error">{error}</p>}
           <button

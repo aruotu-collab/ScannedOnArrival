@@ -25,6 +25,7 @@ export type DetectResult = {
 
 type CvMat = {
   delete: () => void;
+  clone?: () => CvMat;
   rows: number;
   data32S?: Int32Array;
   data32F?: Float32Array;
@@ -42,13 +43,17 @@ type OpenCV = {
   Size: new (width: number, height: number) => unknown;
   COLOR_RGBA2GRAY: number;
   RETR_LIST: number;
+  RETR_EXTERNAL: number;
   CHAIN_APPROX_SIMPLE: number;
   CV_32FC2: number;
   INTER_LINEAR: number;
   BORDER_CONSTANT: number;
   BORDER_REPLICATE: number;
   MORPH_RECT: number;
+  THRESH_BINARY: number;
+  THRESH_OTSU: number;
   getStructuringElement: (shape: number, size: unknown) => CvMat;
+  threshold?: (src: CvMat, dst: CvMat, thresh: number, maxval: number, type: number) => void;
   imread: (source: HTMLCanvasElement | HTMLImageElement | HTMLVideoElement) => CvMat;
   cvtColor: (src: CvMat, dst: CvMat, code: number) => void;
   GaussianBlur: (src: CvMat, dst: CvMat, size: unknown, sigma: number) => void;
@@ -207,13 +212,33 @@ function rectPoints(api: OpenCV, contour: CvMat): Point[] | null {
   }
 }
 
-function findBestDocument(api: OpenCV, edges: CvMat, width: number, height: number): { quad: Quad; confidence: number } | null {
+function considerCandidate(
+  best: { quad: Quad; confidence: number } | null,
+  points: Point[] | null,
+  width: number,
+  height: number,
+): { quad: Quad; confidence: number } | null {
+  if (!points) return best;
+  const quad = orderQuad(points);
+  const confidence = scoreDocumentCandidate(analyzeQuad(quad, width, height, scannerConfig.geometry.edgeMargin));
+  if (!best || confidence > best.confidence) return { quad, confidence };
+  return best;
+}
+
+function findBestDocument(
+  api: OpenCV,
+  mask: CvMat,
+  width: number,
+  height: number,
+  mode: number,
+): { quad: Quad; confidence: number } | null {
+  const work = mask.clone?.() ?? mask;
   const contours = new api.MatVector();
   const hierarchy = new api.Mat();
-  api.findContours(edges, contours, hierarchy, api.RETR_LIST, api.CHAIN_APPROX_SIMPLE);
+  api.findContours(work, contours, hierarchy, mode, api.CHAIN_APPROX_SIMPLE);
 
   const frameArea = width * height;
-  const { minContourArea, maxContourArea, minConfidence } = scannerConfig.detection;
+  const { minContourArea, maxContourArea } = scannerConfig.detection;
   let best: { quad: Quad; confidence: number } | null = null;
 
   for (let i = 0; i < contours.size(); i++) {
@@ -223,20 +248,59 @@ function findBestDocument(api: OpenCV, edges: CvMat, width: number, height: numb
       contour.delete();
       continue;
     }
-    const points = approxQuad(api, contour) ?? (area > frameArea * 0.22 ? rectPoints(api, contour) : null);
+    const quadPoints = approxQuad(api, contour);
+    const boxPoints = rectPoints(api, contour);
     contour.delete();
-    if (!points) continue;
-    const quad = orderQuad(points);
-    const confidence = scoreDocumentCandidate(analyzeQuad(quad, width, height, scannerConfig.geometry.edgeMargin));
-    if (!best || confidence > best.confidence) {
-      best = { quad, confidence };
-    }
+    best = considerCandidate(best, quadPoints, width, height);
+    best = considerCandidate(best, boxPoints, width, height);
   }
 
   contours.delete();
   hierarchy.delete();
-  if (!best || best.confidence < minConfidence) return null;
+  if (work !== mask) work.delete();
+  if (!best || best.confidence < scannerConfig.detection.keepCandidate) return null;
   return best;
+}
+
+function betterCandidate(
+  current: { quad: Quad; confidence: number } | null,
+  next: { quad: Quad; confidence: number } | null,
+): { quad: Quad; confidence: number } | null {
+  if (!next) return current;
+  if (!current || next.confidence > current.confidence) return next;
+  return current;
+}
+
+function detectOnEdges(
+  api: OpenCV,
+  blur: CvMat,
+  kernel: CvMat,
+  width: number,
+  height: number,
+  low: number,
+  high: number,
+): { quad: Quad; confidence: number } | null {
+  const edges = new api.Mat();
+  const dilated = new api.Mat();
+  try {
+    api.Canny(blur, edges, low, high);
+    api.dilate(edges, dilated, kernel);
+    return findBestDocument(api, dilated, width, height, api.RETR_LIST);
+  } finally {
+    edges.delete();
+    dilated.delete();
+  }
+}
+
+function detectOnPaperBlob(api: OpenCV, blur: CvMat, width: number, height: number): { quad: Quad; confidence: number } | null {
+  if (!api.threshold) return null;
+  const binary = new api.Mat();
+  try {
+    api.threshold(blur, binary, 0, 255, api.THRESH_BINARY + api.THRESH_OTSU);
+    return findBestDocument(api, binary, width, height, api.RETR_EXTERNAL);
+  } finally {
+    binary.delete();
+  }
 }
 
 export function detectPaperOnCanvas(source: HTMLCanvasElement): DetectResult {
@@ -245,7 +309,7 @@ export function detectPaperOnCanvas(source: HTMLCanvasElement): DetectResult {
   const empty: DetectResult = {
     corners: null,
     locked: false,
-    hint: "Find the document",
+    hint: "Fit the whole page in the frame",
     frameWidth: width,
     frameHeight: height,
     confidence: 0,
@@ -255,22 +319,24 @@ export function detectPaperOnCanvas(source: HTMLCanvasElement): DetectResult {
   const src = api.imread(source);
   const gray = new api.Mat();
   const blur = new api.Mat();
-  const edges = new api.Mat();
-  const dilated = new api.Mat();
-  const kernel = api.getStructuringElement(api.MORPH_RECT, new api.Size(3, 3));
+  const kernel = api.getStructuringElement(api.MORPH_RECT, new api.Size(5, 5));
 
   try {
     api.cvtColor(src, gray, api.COLOR_RGBA2GRAY);
     api.GaussianBlur(gray, blur, new api.Size(5, 5), 0);
-    api.Canny(blur, edges, 50, 160);
-    api.dilate(edges, dilated, kernel);
-    const found = findBestDocument(api, dilated, width, height);
+    let found = detectOnEdges(api, blur, kernel, width, height, 40, 140);
+    if (!found || found.confidence < 0.45) {
+      found = betterCandidate(found, detectOnEdges(api, blur, kernel, width, height, 20, 80));
+    }
+    if (!found || found.confidence < 0.45) {
+      found = betterCandidate(found, detectOnPaperBlob(api, blur, width, height));
+    }
     if (!found) return empty;
     const metrics = analyzeQuad(found.quad, width, height, scannerConfig.geometry.edgeMargin);
     return {
       corners: found.quad,
-      locked: found.confidence >= 0.72 && !metrics.clipped,
-      hint: "Find the document",
+      locked: found.confidence >= 0.68 && !metrics.clipped,
+      hint: "Fit the whole page in the frame",
       frameWidth: width,
       frameHeight: height,
       confidence: found.confidence,
@@ -280,8 +346,6 @@ export function detectPaperOnCanvas(source: HTMLCanvasElement): DetectResult {
     src.delete();
     gray.delete();
     blur.delete();
-    edges.delete();
-    dilated.delete();
     kernel.delete();
   }
 }
@@ -293,7 +357,7 @@ export function detectFromVideo(video: HTMLVideoElement): DetectResult {
     return {
       corners: null,
       locked: false,
-      hint: "Find the document",
+      hint: "Fit the whole page in the frame",
       frameWidth: 1,
       frameHeight: 1,
       confidence: 0,
@@ -309,7 +373,7 @@ export function detectFromVideo(video: HTMLVideoElement): DetectResult {
     return {
       corners: null,
       locked: false,
-      hint: "Find the document",
+      hint: "Fit the whole page in the frame",
       frameWidth: nativeW,
       frameHeight: nativeH,
       confidence: 0,
@@ -442,7 +506,7 @@ export async function flattenCapturedFrame(video: HTMLVideoElement, hint?: Quad 
   const refined = detectPaperOnCanvas(full);
   const quad = refined.corners ?? hint ?? null;
   if (!quad) {
-    throw new Error("Could not see the page edges. Lay it flat on a contrasting table and try again.");
+    return canvasToJpeg(full, `scan-${Date.now()}.jpg`);
   }
   return canvasToJpeg(warpPaper(full, quad), `scan-${Date.now()}.jpg`);
 }
@@ -465,15 +529,10 @@ export async function flattenImageFile(file: File): Promise<File> {
   return canvasToJpeg(warpPaper(canvas, detected.corners), file.name.replace(/(\.\w+)?$/, "-flat.jpg"));
 }
 
-function a4Guide(width: number, height: number): { x: number; y: number; width: number; height: number } {
-  const ratio = 1 / Math.SQRT2;
-  let boxH = height * 0.78;
-  let boxW = boxH * ratio;
-  if (boxW > width * 0.82) {
-    boxW = width * 0.82;
-    boxH = boxW / ratio;
-  }
-  return { x: (width - boxW) / 2, y: (height - boxH) / 2, width: boxW, height: boxH };
+function pageGuide(width: number, height: number): { x: number; y: number; width: number; height: number } {
+  const insetX = width * 0.045;
+  const insetY = height * 0.07;
+  return { x: insetX, y: insetY, width: width - insetX * 2, height: height - insetY * 2 };
 }
 
 function strokeCorner(ctx: CanvasRenderingContext2D, point: Point, dx: number, dy: number, size: number) {
@@ -481,6 +540,28 @@ function strokeCorner(ctx: CanvasRenderingContext2D, point: Point, dx: number, d
   ctx.moveTo(point.x, point.y + dy * size);
   ctx.lineTo(point.x, point.y);
   ctx.lineTo(point.x + dx * size, point.y);
+  ctx.stroke();
+}
+
+function strokeGuideBrackets(
+  ctx: CanvasRenderingContext2D,
+  box: { x: number; y: number; width: number; height: number },
+  size: number,
+) {
+  const { x, y, width, height } = box;
+  ctx.beginPath();
+  ctx.moveTo(x, y + size);
+  ctx.lineTo(x, y);
+  ctx.lineTo(x + size, y);
+  ctx.moveTo(x + width - size, y);
+  ctx.lineTo(x + width, y);
+  ctx.lineTo(x + width, y + size);
+  ctx.moveTo(x + width, y + height - size);
+  ctx.lineTo(x + width, y + height);
+  ctx.lineTo(x + width - size, y + height);
+  ctx.moveTo(x + size, y + height);
+  ctx.lineTo(x, y + height);
+  ctx.lineTo(x, y + height - size);
   ctx.stroke();
 }
 
@@ -500,15 +581,19 @@ export function drawScanOverlay(canvas: HTMLCanvasElement, video: HTMLVideoEleme
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, displayW, displayH);
 
-  const guide = a4Guide(displayW, displayH);
-  ctx.save();
-  ctx.strokeStyle = result.locked ? "rgba(47, 122, 88, 0.35)" : "rgba(247, 241, 228, 0.5)";
-  ctx.setLineDash([7, 7]);
-  ctx.lineWidth = 2;
-  ctx.strokeRect(guide.x, guide.y, guide.width, guide.height);
-  ctx.restore();
+  if (!result.corners) {
+    const guide = pageGuide(displayW, displayH);
+    ctx.save();
+    ctx.strokeStyle = "rgba(247, 241, 228, 0.72)";
+    ctx.lineWidth = 3;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    strokeGuideBrackets(ctx, guide, Math.max(28, Math.min(displayW, displayH) * 0.08));
+    ctx.restore();
+    return;
+  }
 
-  if (!result.corners || result.frameWidth < 2 || result.frameHeight < 2) return;
+  if (result.frameWidth < 2 || result.frameHeight < 2) return;
 
   const layout = getVideoLayout(video);
   const quad = {
