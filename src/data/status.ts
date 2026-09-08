@@ -46,6 +46,15 @@ export function locationShort(doc: DocumentRecord): string {
   return `stored in ${providerLabel(doc.locationProvider)}`;
 }
 
+export function locationLine(doc: DocumentRecord): string {
+  if (doc.storageKind === "stored" && (doc.source === "camera" || doc.locationProvider === "local")) {
+    return "On this phone";
+  }
+  const label = doc.locationLabel?.trim();
+  if (label && !/^stored locally/i.test(label)) return label;
+  return `In ${providerLabel(doc.locationProvider)}`;
+}
+
 export function providerLabel(provider: DocumentRecord["locationProvider"]): string {
   switch (provider) {
     case "icloud":

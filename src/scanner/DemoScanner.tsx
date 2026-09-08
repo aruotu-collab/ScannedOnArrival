@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type PointerEvent } from "react";
+import { createPortal } from "react-dom";
 import { demoLetterCornersPx } from "../lib/demoLetter";
 import {
   clampDemoPose,
@@ -149,6 +150,7 @@ export function DemoScanner({
 
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
     if (capturingRef.current) return;
+    if ((event.target as HTMLElement | null)?.closest("button, a, input, label")) return;
     movedRef.current = true;
     event.currentTarget.setPointerCapture(event.pointerId);
     pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
@@ -227,7 +229,7 @@ export function DemoScanner({
     window.setTimeout(() => onCaptured(), 1100);
   };
 
-  return (
+  return createPortal(
     <div className="scanner-screen demo-scanner">
       <p className="demo-ribbon demo-ribbon-bar" aria-hidden="true">
         Demo
@@ -246,7 +248,13 @@ export function DemoScanner({
           Demo
         </span>
         <div className="scanner-top">
-          <button className="scanner-icon-btn" type="button" onClick={onClose} aria-label="Close scanner">
+          <button
+            className="scanner-icon-btn"
+            type="button"
+            aria-label="Close scanner"
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={onClose}
+          >
             ×
           </button>
           <p className="scanner-pages">{pageCaption}</p>
@@ -265,6 +273,7 @@ export function DemoScanner({
             type="button"
             disabled={capturing}
             aria-label="Capture page"
+            onPointerDown={(event) => event.stopPropagation()}
             onClick={(event) => {
               event.stopPropagation();
               capture();
@@ -279,6 +288,7 @@ export function DemoScanner({
           <span>Keep this tab open. The page is being cropped and stored on this device.</span>
         </div>
       )}
-    </div>
+    </div>,
+    document.body,
   );
 }

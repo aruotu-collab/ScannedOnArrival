@@ -20,7 +20,7 @@ import {
   typeById,
 } from "./data/taxonomy";
 import { SAMPLE_DOCUMENTS, SAMPLE_INBOX } from "./data/sample";
-import { computeStatus, freshnessLabel, providerLabel, storageVerb } from "./data/status";
+import { computeStatus, locationLine } from "./data/status";
 import { extractPdfText, isImage, isPdf } from "./lib/pdf";
 import { extractImageText } from "./lib/ocr";
 import { consumeSharedFile, isDesktopLayout, isIos, isStandalone } from "./lib/pwa";
@@ -66,8 +66,7 @@ const DEFAULT_CROP: CropInsets = { top: 4, right: 4, bottom: 4, left: 4 };
 const DEMO_DOC_ID = "demo-try-scan";
 const DEMO_PAGE_LIMIT = 3;
 const NAV_ITEMS: Array<{ id: ViewId; label: string; short: string }> = [
-  { id: "ready", label: "Ready", short: "Ready" },
-  { id: "documents", label: "Documents", short: "Docs" },
+  { id: "documents", label: "Scan & Docs", short: "Scan & Docs" },
   { id: "tree", label: "Tree", short: "Tree" },
   { id: "inbox", label: "Inbox", short: "Inbox" },
   { id: "settings", label: "Settings", short: "Settings" },
@@ -110,19 +109,11 @@ function ProductBadge({ tone = "light" }: { tone?: "light" | "dark" }) {
 function PhoneGlyph() {
   return (
     <svg className="scan-cta-glyph" viewBox="0 0 48 48" aria-hidden="true">
-      <rect x="10.6" y="16" width="1.8" height="5.6" rx="0.9" fill="currentColor" />
-      <rect x="10.6" y="23.4" width="1.8" height="3.6" rx="0.9" fill="currentColor" />
-      <rect x="35.6" y="19.2" width="1.8" height="8.4" rx="0.9" fill="currentColor" />
-      <rect x="13.8" y="3.4" width="20.4" height="41.2" rx="6" fill="currentColor" />
-      <rect x="15.6" y="5.4" width="16.8" height="37.2" rx="4.2" fill="#1b3a2f" />
-      <rect x="20.2" y="6.8" width="7.6" height="2.8" rx="1.4" fill="currentColor" />
-      <circle cx="25.8" cy="8.2" r="0.72" fill="#1b3a2f" />
-      <rect x="18.4" y="12.8" width="11.2" height="16.8" rx="1.1" fill="currentColor" />
-      <path d="M26.2 12.8h3.4v3.4H27.4c-.66 0-1.2-.54-1.2-1.2Z" fill="#1b3a2f" opacity="0.22" />
-      <path d="M26.2 12.8 29.6 16.2h-2.1c-.72 0-1.3-.58-1.3-1.3Z" fill="#1b3a2f" opacity="0.4" />
-      <rect x="20.2" y="18.8" width="7.6" height="1.15" rx="0.55" fill="#1b3a2f" opacity="0.5" />
-      <rect x="20.2" y="21.4" width="7.6" height="1.15" rx="0.55" fill="#1b3a2f" opacity="0.38" />
-      <rect x="20.2" y="24" width="5.4" height="1.15" rx="0.55" fill="#1b3a2f" opacity="0.26" />
+      <path
+        fill="currentColor"
+        fillRule="evenodd"
+        d="M17.4 2.6h13.2A6.4 6.4 0 0 1 37 9v30a6.4 6.4 0 0 1-6.4 6.4H17.4A6.4 6.4 0 0 1 11 39V9a6.4 6.4 0 0 1 6.4-6.4Zm3.8 3.2h5.6c.8 0 1.4.6 1.4 1.3s-.6 1.3-1.4 1.3h-5.6c-.8 0-1.4-.6-1.4-1.3s.6-1.3 1.4-1.3ZM15.6 11.2h16.8c.9 0 1.6.7 1.6 1.6v22.4c0 .9-.7 1.6-1.6 1.6H15.6c-.9 0-1.6-.7-1.6-1.6V12.8c0-.9.7-1.6 1.6-1.6Z"
+      />
     </svg>
   );
 }
@@ -130,26 +121,32 @@ function PhoneGlyph() {
 function ScanCta({
   onScan,
   onAdd,
-  compact,
+  title = "Scan with your phone",
+  subtitle = "Point this browser at the paper — no app to install",
+  addLabel = "or add a PDF or file",
+  busy = false,
 }: {
   onScan: () => void;
   onAdd?: () => void;
-  compact?: boolean;
+  title?: string;
+  subtitle?: string;
+  addLabel?: string;
+  busy?: boolean;
 }) {
   return (
-    <div className={`scan-cta ${compact ? "compact" : ""}`}>
-      <button type="button" className="scan-cta-btn" onClick={onScan}>
+    <div className="scan-cta">
+      <button type="button" className="scan-cta-btn" disabled={busy} onClick={onScan}>
         <span className="scan-cta-icon">
           <PhoneGlyph />
         </span>
         <span className="scan-cta-copy">
-          <strong>Scan with your phone</strong>
-          <em>Point this browser at the paper — no app to install</em>
+          <strong>{title}</strong>
+          <em>{subtitle}</em>
         </span>
       </button>
       {onAdd && (
         <button type="button" className="scan-cta-add" onClick={onAdd}>
-          or add a PDF or file
+          {addLabel}
         </button>
       )}
     </div>
@@ -271,7 +268,7 @@ export default function App() {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [inbox, setInbox] = useState<InboxItem[]>([]);
   const [foundEmail, setFoundEmail] = useState<FoundEmailDoc[]>([]);
-  const [view, setView] = useState<ViewId>("ready");
+  const [view, setView] = useState<ViewId>("documents");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [expandedTypeId, setExpandedTypeId] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
@@ -460,14 +457,15 @@ export default function App() {
   };
 
   const goToView = (next: ViewId) => {
-    if (view === "demo" && next === "documents") setFromDemoNav(true);
-    setView(next);
+    const target = next === "ready" ? "documents" : next;
+    if (view === "demo" && target === "documents") setFromDemoNav(true);
+    setView(target);
   };
 
   const openRealThing = () => {
     setDemoLanding(false);
     setFromDemoNav(false);
-    setView("ready");
+    setView("documents");
     openAdd("camera");
   };
 
@@ -633,6 +631,10 @@ export default function App() {
 
   return (
     <div className={`app${view === "demo" || demoLanding ? " demo-mode" : ""}`}>
+      <p className="app-nameplate">
+        <PhoneGlyph />
+        <span>ScannedOnArrival</span>
+      </p>
       <aside className="sidebar">
         <div className="wordmark">
           <ProductBadge tone="dark" />
@@ -663,23 +665,21 @@ export default function App() {
             <ProductBadge />
             <div className="topbar-heading">
               <h1>
-                {view === "ready" && "Ready"}
                 {view === "demo" && "Demo"}
-                {view === "documents" && "Documents"}
+                {(view === "documents" || view === "ready") && "Scan and Docs"}
                 {view === "tree" && "Document tree"}
                 {view === "inbox" && "Document inbox"}
                 {view === "settings" && "Settings"}
               </h1>
-              {view === "ready" && (
+              {(view === "documents" || view === "ready") && (
                 <button type="button" className="try-demo-btn" onClick={() => setView("demo")}>
                   Try Demo
                 </button>
               )}
             </div>
             <p>
-              {view === "ready" && "What’s current, missing, or overdue — organised by document type, not files."}
               {view === "demo" && "Scan the letter, check the page, then save it under Council Tax."}
-              {view === "documents" && "Tap a category, then a type. Swipe the tabs for other types; swipe the page for other copies."}
+              {(view === "documents" || view === "ready") && "Scan a letter, then tap a category. What’s current, missing, or overdue sits with the file."}
               {view === "tree" && "A filing-cabinet view. The folders are logical; the files can live anywhere."}
               {view === "inbox" && "Letterbox or inbox: both are ways documents arrive. Email stays optional."}
               {view === "settings" && "Keep the privacy story clear. Local by default, convenience only if you choose it."}
@@ -691,26 +691,21 @@ export default function App() {
             Demo
           </p>
         )}
-        {view === "documents" && (demoLanding || fromDemoNav) && (
-          <div className="scan-hero">
-            <button type="button" className="primary ready demo-real demo-landing-real" onClick={openRealThing}>
-              Try the real thing now
-            </button>
-          </div>
-        )}
-        {view !== "demo" && view !== "documents" && !demoLanding && (
+        {view !== "demo" && (
           <div className="scan-hero">
             <ScanCta
-              onScan={() => openAdd("camera")}
-              onAdd={() => openAdd("choose")}
-            />
-          </div>
-        )}
-        {view === "documents" && !demoLanding && !fromDemoNav && (
-          <div className="scan-hero">
-            <ScanCta
-              onScan={() => openAdd("camera")}
-              onAdd={() => openAdd("choose")}
+              onScan={() => {
+                if (demoLanding || fromDemoNav) {
+                  openRealThing();
+                  return;
+                }
+                openAdd("camera");
+              }}
+              onAdd={() => {
+                setDemoLanding(false);
+                setFromDemoNav(false);
+                openAdd("choose");
+              }}
             />
           </div>
         )}
@@ -720,50 +715,41 @@ export default function App() {
             prompt={installPrompt}
             onInstalled={() => setInstallPrompt(null)}
           />
-          {view === "ready" && (
-            <ReadyView
-              documents={documents}
-              attention={attention}
-              expandedTypeId={expandedTypeId}
-              onExpand={(typeId, documentId) => {
-                setExpandedTypeId(typeId);
-                if (documentId) setSelectedId(documentId);
-              }}
-              onAdd={() => openAdd(isDesktopLayout() ? "choose" : "camera")}
-              onScan={(typeId) => openAdd("camera", typeId)}
-              onDeleted={async (id) => {
-                await deleteDocument(id);
-                setDocuments(documents.filter((d) => d.id !== id));
-                if (selectedId === id) setSelectedId(null);
-              }}
-            />
-          )}
           {view === "demo" && (
             <DemoView
               onSave={saveDemoScan}
               onTryReal={openRealThing}
             />
           )}
-          {view === "documents" && (
-            <DocumentsView
-              documents={currentDocs}
-              allDocuments={documents}
-              expandedTypeId={expandedTypeId}
-              fromDemo={demoLanding}
-              showRealCta={demoLanding || fromDemoNav}
-              onDismissDemo={() => setDemoLanding(false)}
-              onExpand={(typeId, documentId) => {
-                setExpandedTypeId(typeId);
-                if (documentId) setSelectedId(documentId);
-              }}
-              onAdd={() => openAdd("choose")}
-              onScan={(typeId) => openAdd("camera", typeId)}
-              onDeleted={async (id) => {
-                await deleteDocument(id);
-                setDocuments(documents.filter((d) => d.id !== id));
-                if (selectedId === id) setSelectedId(null);
-              }}
-            />
+          {(view === "documents" || view === "ready") && (
+            <>
+              <HomeStatus
+                documents={documents}
+                attention={attention}
+                onOpenAttention={(typeId, documentId) => {
+                  setExpandedTypeId(typeId);
+                  if (documentId) setSelectedId(documentId);
+                }}
+              />
+              <DocumentsView
+                documents={currentDocs}
+                allDocuments={documents}
+                expandedTypeId={expandedTypeId}
+                fromDemo={demoLanding}
+                onDismissDemo={() => setDemoLanding(false)}
+                onExpand={(typeId, documentId) => {
+                  setExpandedTypeId(typeId);
+                  if (documentId) setSelectedId(documentId);
+                }}
+                onAdd={(typeId) => openAdd("choose", typeId)}
+                onScan={(typeId) => openAdd("camera", typeId)}
+                onDeleted={async (id) => {
+                  await deleteDocument(id);
+                  setDocuments(documents.filter((d) => d.id !== id));
+                  if (selectedId === id) setSelectedId(null);
+                }}
+              />
+            </>
           )}
           {view === "tree" && (
             <TreeView
@@ -1056,14 +1042,14 @@ function DemoView({
             No paper needed. A sample letter is already on the table. Scan it the same way as a real letter: find the
             page, tap the shutter, check the scan, then save it.
           </p>
-          <div className="demo-cta">
-            <button type="button" className="primary demo-try" disabled={loading} onClick={() => void startScan()}>
-              {loading ? "Opening the camera…" : "Try the demo"}
-            </button>
-            <button type="button" className="primary ready demo-real" onClick={onTryReal}>
-              Try the real thing now
-            </button>
-          </div>
+          <ScanCta
+            title={loading ? "Opening the camera…" : "Try the demo"}
+            subtitle="A sample letter is already on the table — no paper needed"
+            addLabel="Try the real thing now"
+            busy={loading}
+            onScan={() => void startScan()}
+            onAdd={onTryReal}
+          />
           {error && <p className="meta">{error}</p>}
           <ol className="demo-menu compact">
             <li>
@@ -1095,13 +1081,19 @@ function DemoView({
         />
       )}
 
-      {phase === "pages" && currentPage && (
+      {phase === "pages" && currentPage && createPortal(
         <div className="demo-review">
           <p className="demo-ribbon demo-ribbon-bar" aria-hidden="true">
             Demo
           </p>
           <div className="demo-review-top">
-            <button className="scanner-icon-btn" type="button" onClick={closeReview} aria-label="Close">
+            <button
+              className="scanner-icon-btn"
+              type="button"
+              aria-label="Close"
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={closeReview}
+            >
               ×
             </button>
             <div>
@@ -1202,16 +1194,23 @@ function DemoView({
               Don’t use this one
             </button>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
 
-      {phase === "form" && (
+      {phase === "form" && createPortal(
         <div className="demo-review">
           <p className="demo-ribbon demo-ribbon-bar" aria-hidden="true">
             Demo
           </p>
           <div className="demo-review-top">
-            <button className="scanner-icon-btn" type="button" onClick={() => setPhase("pages")} aria-label="Back">
+            <button
+              className="scanner-icon-btn"
+              type="button"
+              aria-label="Back"
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={() => setPhase("pages")}
+            >
               ×
             </button>
             <div>
@@ -1253,7 +1252,8 @@ function DemoView({
               Back to pages
             </button>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
 
       {viewerOpen && pages.length > 0 && (
@@ -1269,32 +1269,136 @@ function DemoView({
   );
 }
 
-function ReadyView({
+function ConfirmDialog({
+  title,
+  message,
+  confirmLabel = "Remove",
+  onConfirm,
+  onCancel,
+}: {
+  title: string;
+  message: string;
+  confirmLabel?: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return createPortal(
+    <div className="modal-back confirm-back" onClick={onCancel} role="presentation">
+      <div
+        className="modal confirm-modal"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="confirm-title"
+        aria-describedby="confirm-copy"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <h2 id="confirm-title">{title}</h2>
+        <p id="confirm-copy" className="meta">
+          {message}
+        </p>
+        <div className="row confirm-actions">
+          <button type="button" className="secondary" onClick={onCancel}>
+            Cancel
+          </button>
+          <button type="button" className="danger" onClick={onConfirm}>
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+function HomeStatus({
   documents,
   attention,
-  expandedTypeId,
-  onExpand,
-  onAdd,
-  onScan,
-  onDeleted,
+  onOpenAttention,
 }: {
   documents: DocumentRecord[];
   attention: AttentionItem[];
-  expandedTypeId: string | null;
-  onExpand: (typeId: string | null, documentId?: string) => void;
-  onAdd: () => void;
-  onScan: (typeId: string) => void;
-  onDeleted: (id: string) => void;
+  onOpenAttention: (typeId: string | null, documentId?: string) => void;
 }) {
+  type StatusTab = "current" | "attention" | "missing";
+  const [tab, setTab] = useState<StatusTab>(attention.length > 0 ? "attention" : "current");
+  const [panelOpen, setPanelOpen] = useState(false);
   const current = documents.filter((d) => d.isCurrent);
   const rows = allTypes().filter((t) => t.id !== "other").map((type) => {
     const doc = current.find((d) => d.typeId === type.id);
     const status = doc ? computeStatus(doc) : "missing";
     return { type, doc, status };
   });
-  const missing = rows.filter((r) => r.status === "missing").length;
-  const outdated = rows.filter((r) => r.status === "outdated" || r.status === "expiring").length;
-  const ready = rows.filter((r) => r.status === "current").length;
+  const currentRows = rows
+    .filter((row) => row.doc && row.status === "current")
+    .map((row) => ({
+      key: row.doc!.id,
+      typeId: row.type.id,
+      documentId: row.doc!.id,
+      title: row.doc!.title,
+      typeLabel: row.type.label,
+      detail: locationLine(row.doc!),
+      badge: "Current",
+      kind: "current" as const,
+    }));
+  const missingRows = rows
+    .filter((row) => row.status === "missing")
+    .map((row) => ({
+      key: row.type.id,
+      typeId: row.type.id,
+      documentId: undefined as string | undefined,
+      title: "Nothing saved here yet",
+      typeLabel: row.type.label,
+      detail: "Scan or add a PDF into this type",
+      badge: "Missing",
+      kind: "missing" as const,
+    }));
+  const attentionRows = attention.map((item) => ({
+    key: item.key,
+    typeId: documents.find((doc) => doc.id === item.documentId)?.typeId ?? null,
+    documentId: item.documentId,
+    title: item.title,
+    typeLabel: item.typeLabel,
+    detail: item.detail,
+    badge: item.kind === "expiring" ? "Expiring" : "Outdated",
+    kind: item.kind,
+  }));
+  const ready = currentRows.length;
+  const outdated = attentionRows.length;
+  const missing = missingRows.length;
+  const panels = {
+    current: {
+      title: "Current",
+      count: ready === 1 ? "1 file" : `${ready} files`,
+      lead: "These copies are in date.",
+      empty: "No in-date copies yet.",
+      rows: currentRows,
+    },
+    attention: {
+      title: "Needs attention",
+      count: outdated === 1 ? "1 action" : `${outdated} actions`,
+      lead: "These copies are in your index but are outdated or about to expire.",
+      empty: "Nothing needs attention.",
+      rows: attentionRows,
+    },
+    missing: {
+      title: "Missing",
+      count: missing === 1 ? "1 missing" : `${missing} missing`,
+      lead: "These types have no file in the index yet.",
+      empty: "Every type has a file.",
+      rows: missingRows,
+    },
+  } as const;
+  const panel = panels[tab];
+  const selectTab = (next: StatusTab) => {
+    if (tab === next) {
+      setPanelOpen((open) => !open);
+      return;
+    }
+    setTab(next);
+    setPanelOpen(true);
+  };
+  const tabClass = (id: StatusTab) =>
+    `stat ${id}${tab === id ? " selected" : ""}${tab === id && panelOpen ? " open" : ""}`;
 
   return (
     <>
@@ -1306,54 +1410,70 @@ function ReadyView({
         </span>
       </div>
       <PhoneHandoff />
-      <div className="summary-strip">
-        <div className="stat current">
-          <b>{ready}</b>
-          Current
+      <div className={`status-sleeve ${tab}${panelOpen ? " open" : ""}`}>
+        <div className="summary-strip" role="tablist" aria-label="Document status">
+          <button
+            type="button"
+            role="tab"
+            className={tabClass("current")}
+            aria-selected={tab === "current"}
+            aria-expanded={tab === "current" ? panelOpen : false}
+            onClick={() => selectTab("current")}
+          >
+            <b>{ready}</b>
+            <span className="stat-copy">Current</span>
+            <span className="stat-chevron" aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            role="tab"
+            className={tabClass("attention")}
+            aria-selected={tab === "attention"}
+            aria-expanded={tab === "attention" ? panelOpen : false}
+            onClick={() => selectTab("attention")}
+          >
+            <b>{outdated}</b>
+            <span className="stat-copy">Needs attention</span>
+            <span className="stat-chevron" aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            role="tab"
+            className={tabClass("missing")}
+            aria-selected={tab === "missing"}
+            aria-expanded={tab === "missing" ? panelOpen : false}
+            onClick={() => selectTab("missing")}
+          >
+            <b>{missing}</b>
+            <span className="stat-copy">Missing</span>
+            <span className="stat-chevron" aria-hidden="true" />
+          </button>
         </div>
-        <div className="stat attention">
-          <b>{outdated}</b>
-          Needs attention
-        </div>
-        <div className="stat missing">
-          <b>{missing}</b>
-          Missing
+        <div className={`attention-list ${tab}${panelOpen ? " open" : ""}`}>
+          {panelOpen && (
+            <>
+              <p className="attention-lead">{panel.rows.length ? panel.lead : panel.empty}</p>
+              {panel.rows.map((item) => (
+                <button
+                  key={item.key}
+                  className="attention-row"
+                  onClick={() => {
+                    onOpenAttention(item.typeId, item.documentId);
+                  }}
+                >
+                  <div>
+                    <b>{item.typeLabel}</b>
+                    <small>
+                      {item.title} · {item.detail}
+                    </small>
+                  </div>
+                  <span className={`badge ${item.kind}`}>{item.badge}</span>
+                </button>
+              ))}
+            </>
+          )}
         </div>
       </div>
-      {attention.length > 0 && (
-        <div className="attention-list">
-          <strong>Needs attention</strong>
-          <span>These copies are in your index but are outdated or about to expire.</span>
-          {attention.map((item) => (
-            <button
-              key={item.key}
-              className="attention-row"
-              onClick={() => {
-                const doc = documents.find((row) => row.id === item.documentId);
-                onExpand(doc?.typeId ?? null, item.documentId);
-              }}
-            >
-              <div>
-                <b>{item.typeLabel}</b>
-                <small>
-                  {item.title} · {item.detail}
-                </small>
-              </div>
-              <span className={`badge ${item.kind}`}>{item.kind === "expiring" ? "Expiring" : "Outdated"}</span>
-            </button>
-          ))}
-        </div>
-      )}
-      <TypeAccordion
-        types={allTypes().filter((type) => type.id !== "other")}
-        documents={documents}
-        expandedTypeId={expandedTypeId}
-        includeEmpty
-        onExpand={onExpand}
-        onAdd={onAdd}
-        onScan={onScan}
-        onDeleted={onDeleted}
-      />
     </>
   );
 }
@@ -1480,103 +1600,11 @@ function TypeTabStrip({
   );
 }
 
-function TypeAccordion({
-  types,
-  documents,
-  expandedTypeId,
-  includeEmpty,
-  onExpand,
-  onAdd,
-  onScan,
-  onDeleted,
-}: {
-  types: DocumentTypeDef[];
-  documents: DocumentRecord[];
-  expandedTypeId: string | null;
-  includeEmpty?: boolean;
-  onExpand: (typeId: string | null, documentId?: string) => void;
-  onAdd?: () => void;
-  onScan?: (typeId: string) => void;
-  onDeleted: (id: string) => void;
-}) {
-  const groups = types
-    .map((type) => {
-      const copies = copiesForType(documents, type.id);
-      const current = copies.find((doc) => doc.isCurrent) ?? copies[0];
-      return { type, copies, current };
-    })
-    .filter((group) => includeEmpty || group.copies.length);
-
-  return (
-    <div className="doc-stack">
-      {groups.map(({ type, copies, current }) => {
-        const open = expandedTypeId === type.id;
-        const status = current ? computeStatus(current) : "missing";
-        return (
-          <section
-            key={type.id}
-            id={`type-${type.id}`}
-            className={`doc-type-card ${open ? "open" : ""}`}
-          >
-            <button
-              className="doc-type-head"
-              onClick={() => {
-                onExpand(open ? null : type.id, current?.id);
-                window.requestAnimationFrame(() => {
-                  document.getElementById(`type-${type.id}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
-                });
-              }}
-            >
-              <div>
-                <div className="kicker">{allCategories().find((category) => category.id === type.categoryId)?.label}</div>
-                <h3>
-                  {type.label} <span className="doc-count">{copies.length}</span>
-                </h3>
-                <p className="meta">
-                  {copies.length === 0
-                    ? "No documents yet. Open to scan into this type."
-                    : current
-                      ? `${copies.length} ${copies.length === 1 ? "document" : "documents"} · ${freshnessLabel(current)}`
-                      : `${copies.length} ${copies.length === 1 ? "document" : "documents"}`}
-                </p>
-              </div>
-              <span className={`badge ${status}`}>{statusBadgeText(status)}</span>
-            </button>
-            {open && (
-              <>
-                <div className="doc-type-toolbar">
-                  {onScan && <ScanCta compact onScan={() => onScan(type.id)} onAdd={onAdd} />}
-                </div>
-                {copies.length === 0 && <p className="meta doc-type-empty">Nothing saved here yet.</p>}
-                {current && (
-                  <div className="doc-rail" aria-label={`${type.label} copies`}>
-                    {copies.map((doc) => (
-                      <div key={doc.id} className="doc-slide">
-                        <DocumentDetail
-                          doc={doc}
-                          previous={copies.filter((item) => item.id !== doc.id && !item.isCurrent)}
-                          compact
-                          onDeleted={() => onDeleted(doc.id)}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </>
-            )}
-          </section>
-        );
-      })}
-    </div>
-  );
-}
-
 function DocumentsView({
   documents,
   allDocuments,
   expandedTypeId,
   fromDemo,
-  showRealCta,
   onDismissDemo,
   onExpand,
   onAdd,
@@ -1587,10 +1615,9 @@ function DocumentsView({
   allDocuments: DocumentRecord[];
   expandedTypeId: string | null;
   fromDemo?: boolean;
-  showRealCta?: boolean;
   onDismissDemo?: () => void;
   onExpand: (typeId: string | null, documentId?: string) => void;
-  onAdd: () => void;
+  onAdd: (typeId: string) => void;
   onScan: (typeId: string) => void;
   onDeleted: (id: string) => void;
 }) {
@@ -1619,10 +1646,7 @@ function DocumentsView({
 
   const selectedType = expandedTypeId ? typeById(expandedTypeId) : null;
   const selectedCategoryId =
-    catalog.find((group) => group.category.id === selectedType?.categoryId)?.category.id ??
-    catalog.find((group) => group.count > 0)?.category.id ??
-    catalog[0]?.category.id ??
-    null;
+    catalog.find((group) => group.category.id === selectedType?.categoryId)?.category.id ?? null;
   const pendingPin = useRef<{ id: string; y: number } | null>(null);
 
   const selectType = (typeId: string, pinY?: number) => {
@@ -1638,8 +1662,8 @@ function DocumentsView({
   const selectCategory = (categoryId: string, pinY?: number) => {
     const group = catalog.find((item) => item.category.id === categoryId);
     if (!group) return;
-    if (selectedCategoryId === categoryId && expandedTypeId) {
-      scrollCategoryToTop(categoryId, prefersReducedMotion() ? "auto" : "smooth");
+    if (selectedCategoryId === categoryId) {
+      onExpand(null);
       return;
     }
     const preferred =
@@ -1674,6 +1698,7 @@ function DocumentsView({
 
   return (
     <>
+      <h2 className="docs-section-label">Documents</h2>
       {documents.length === 0 && (
         <div className="card empty">
           <h2>Nothing indexed yet</h2>
@@ -1688,85 +1713,98 @@ function DocumentsView({
           group.types[0];
         const copies = activeType ? copiesForType(allDocuments, activeType.id) : [];
         const current = copies.find((doc) => doc.isCurrent) ?? copies[0];
-        const status = current ? computeStatus(current) : "missing";
         return (
           <section
             key={group.category.id}
             id={`category-${group.category.id}`}
             className={`doc-category-card ${selected ? "selected" : ""}`}
           >
-            <button
-              type="button"
-              className="doc-category-card-head"
-              aria-pressed={selected}
-              onClick={(event) => selectCategory(group.category.id, event.currentTarget.getBoundingClientRect().top)}
-            >
-              <div>
-                <h2>{group.category.label}</h2>
-                <p className="meta">
-                  {group.count} {group.count === 1 ? "document" : "documents"}
-                  {group.ready > 0 ? ` · ${group.ready} current` : ""}
-                  {group.attention > 0 ? ` · ${group.attention} needs attention` : ""}
-                  {group.missing > 0 ? ` · ${group.missing} missing` : ""}
-                </p>
-              </div>
-              {selected && <span className="badge current">Selected</span>}
-            </button>
-            {selected && fromDemo && (
-              <div className="demo-landing">
-                <div>
-                  <strong>This is where it lives</strong>
-                  <span>Home → Council Tax · on this device. Your scan is the latest copy below.</span>
-                </div>
-                {onDismissDemo && (
-                  <button type="button" className="secondary" onClick={onDismissDemo}>
-                    Got it
-                  </button>
-                )}
-              </div>
-            )}
-            {selected && activeType && (
-              <div className="doc-category-body">
-                <div className="doc-category-body-inner">
-                  <TypeTabStrip
-                    types={group.types}
-                    documents={allDocuments}
-                    selectedId={activeType.id}
-                    onSelect={selectType}
-                  />
-                  <div className="doc-type-toolbar">
-                    <div className="doc-type-selected">
-                      <div>
-                        <h3>
-                          {activeType.label} <span className="doc-count">{copies.length}</span>
-                        </h3>
-                        <p className="meta">
-                          {copies.length === 0
-                            ? "Nothing saved here yet. Scan into this type."
-                            : current
-                              ? `${copies.length} ${copies.length === 1 ? "document" : "documents"} · ${freshnessLabel(current)}`
-                              : `${copies.length} ${copies.length === 1 ? "document" : "documents"}`}
-                        </p>
-                      </div>
-                      <span className={`badge ${status}`}>{statusBadgeText(status)}</span>
-                    </div>
-                    {!showRealCta && <ScanCta compact onScan={() => onScan(activeType.id)} onAdd={onAdd} />}
+            <div className="doc-category-card-head">
+              <button
+                type="button"
+                className="doc-category-card-select"
+                aria-expanded={selected}
+                aria-pressed={selected}
+                onClick={(event) => selectCategory(group.category.id, event.currentTarget.getBoundingClientRect().top)}
+              >
+                <div className="doc-category-copy">
+                  <div className="doc-category-title">
+                    <h2>{group.category.label}</h2>
+                    {selected && <span className="badge current">Selected</span>}
                   </div>
-                  {copies.length === 0 && <p className="meta doc-type-empty">Nothing saved here yet.</p>}
-                  {current && (
-                    <div className="doc-rail" aria-label={`${activeType.label} copies`}>
-                      {copies.map((doc) => (
-                        <div key={doc.id} className="doc-slide">
-                          <DocumentDetail
-                            doc={doc}
-                            previous={copies.filter((item) => item.id !== doc.id && !item.isCurrent)}
-                            compact
-                            onDeleted={() => onDeleted(doc.id)}
-                          />
+                  <p className="meta">
+                    {group.count} {group.count === 1 ? "document" : "documents"}
+                    {group.ready > 0 ? ` · ${group.ready} current` : ""}
+                    {group.attention > 0 ? ` · ${group.attention} needs attention` : ""}
+                    {group.missing > 0 ? ` · ${group.missing} missing` : ""}
+                  </p>
+                </div>
+              </button>
+              {selected && activeType && (
+                <div className="doc-category-card-aside">
+                  <button
+                    type="button"
+                    className="doc-category-scan"
+                    aria-label={`Scan ${activeType.label} with your phone`}
+                    onClick={() => onScan(activeType.id)}
+                  >
+                    <PhoneGlyph />
+                    <span>Scan</span>
+                  </button>
+                  <button type="button" className="doc-category-add" onClick={() => onAdd(activeType.id)}>
+                    Add a PDF
+                  </button>
+                </div>
+              )}
+              <button
+                type="button"
+                className="doc-category-chevron-btn"
+                aria-expanded={selected}
+                aria-label={selected ? `Collapse ${group.category.label}` : `Expand ${group.category.label}`}
+                onClick={(event) => selectCategory(group.category.id, event.currentTarget.getBoundingClientRect().top)}
+              >
+                <span className="doc-category-chevron" aria-hidden="true" />
+              </button>
+            </div>
+            {activeType && (
+              <div className={`doc-category-body${selected ? " open" : ""}`} inert={!selected || undefined}>
+                <div className="doc-category-body-clip">
+                  <div className="doc-category-body-inner">
+                    {selected && fromDemo && (
+                      <div className="demo-landing">
+                        <div>
+                          <strong>This is where it lives</strong>
+                          <span>Home → Council Tax · on this device. Your scan is the latest copy below.</span>
                         </div>
-                      ))}
-                    </div>
-                  )}
+                        {onDismissDemo && (
+                          <button type="button" className="secondary" onClick={onDismissDemo}>
+                            Got it
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    <TypeTabStrip
+                      types={group.types}
+                      documents={allDocuments}
+                      selectedId={activeType.id}
+                      onSelect={selectType}
+                    />
+                    {copies.length === 0 && <p className="meta doc-type-empty">Nothing saved here yet. Scan into this type.</p>}
+                    {current && (
+                      <div className="doc-rail" aria-label={`${activeType.label} copies`}>
+                        {copies.map((doc) => (
+                          <div key={doc.id} className="doc-slide">
+                            <DocumentDetail
+                              doc={doc}
+                              previous={copies.filter((item) => item.id !== doc.id && !item.isCurrent)}
+                              compact
+                              onDeleted={() => onDeleted(doc.id)}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             )}
@@ -2054,6 +2092,8 @@ function DocumentDetail({
   const [pages, setPages] = useState<Array<{ url: string; image: boolean }>>([]);
   const [viewerAt, setViewerAt] = useState<number | null>(null);
   const [pagesLoading, setPagesLoading] = useState(doc.storageKind === "stored");
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  const status = computeStatus(doc);
 
   useEffect(() => {
     let urls: string[] = [];
@@ -2098,17 +2138,14 @@ function DocumentDetail({
 
   return (
     <aside className={`card doc-detail${doc.id === DEMO_DOC_ID ? " demo-doc" : ""}`}>
-      <p className="kicker">{doc.isCurrent ? "Latest document" : "Earlier copy"}</p>
+      <div className="doc-detail-top">
+        <p className="kicker">{doc.isCurrent ? "Latest document" : "Earlier copy"}</p>
+        <span className={`badge ${status}`}>{statusBadgeText(status)}</span>
+      </div>
       <h2>{doc.title}</h2>
       <p className="meta">
-        {providerLabel(doc.locationProvider)}
-        <br />
-        {doc.locationLabel}
+        {locationLine(doc)} · Checked {doc.lastChecked}
       </p>
-      <div className="row" style={{ margin: "12px 0" }}>
-        <span className={`badge ${computeStatus(doc)}`}>{computeStatus(doc)}</span>
-        <span className={`badge ${doc.storageKind}`}>{storageVerb(doc)}</span>
-      </div>
       {pagesLoading && pages.length === 0 && (
         <div className="preview preview-loading" role="status">
           Opening the scan…
@@ -2140,9 +2177,11 @@ function DocumentDetail({
               />
             )}
           </div>
-          <button type="button" className="secondary preview-full-btn" onClick={() => setViewerAt(0)}>
-            View full file
-          </button>
+          {!compact && (
+            <button type="button" className="secondary preview-full-btn" onClick={() => setViewerAt(0)}>
+              View full file
+            </button>
+          )}
         </>
       )}
       {viewerAt !== null && (
@@ -2154,12 +2193,11 @@ function DocumentDetail({
           onClose={() => setViewerAt(null)}
         />
       )}
-      {doc.storageKind === "referenced" && (
+      {doc.storageKind === "referenced" && !compact && (
         <div className="notice">
-          The file stays where you already keep it. ScannedOnArrival only remembers the description and location.
+          The file stays in its original folder. This app only keeps the listing.
         </div>
       )}
-      <p className="meta">Last checked {doc.lastChecked}</p>
       {!compact && previous.length > 0 && (
         <>
           <h3 style={{ marginTop: 18 }}>Previous versions</h3>
@@ -2178,10 +2216,22 @@ function DocumentDetail({
         </p>
       )}
       <div className="row" style={{ marginTop: 16 }}>
-        <button className="danger" onClick={onDeleted}>
-          Remove from index
+        <button type="button" className="danger" onClick={() => setConfirmRemove(true)}>
+          Remove this listing
         </button>
       </div>
+      {confirmRemove && (
+        <ConfirmDialog
+          title="Remove this listing?"
+          message={`Remove “${doc.title}” from your documents? A referenced file stays in its original folder. You can add the listing again later.`}
+          confirmLabel="Remove this listing"
+          onCancel={() => setConfirmRemove(false)}
+          onConfirm={() => {
+            setConfirmRemove(false);
+            onDeleted();
+          }}
+        />
+      )}
     </aside>
   );
 }
@@ -2193,6 +2243,8 @@ function TreeView({
   documents: DocumentRecord[];
   onSelect: (id: string) => void;
 }) {
+  const [openCategories, setOpenCategories] = useState<string[]>([]);
+  const [openTypes, setOpenTypes] = useState<string[]>([]);
   const grouped = useMemo(() => {
     return allCategories().map((category) => {
       const types = allTypes().filter((t) => t.categoryId === category.id);
@@ -2210,44 +2262,101 @@ function TreeView({
     }).filter((g) => g.types.some((t) => t.type.id !== "other" || t.docs.length));
   }, [documents]);
 
+  const toggleCategory = (id: string) => {
+    setOpenCategories((current) =>
+      current.includes(id) ? current.filter((item) => item !== id) : [...current, id],
+    );
+  };
+
+  const toggleType = (id: string) => {
+    setOpenTypes((current) =>
+      current.includes(id) ? current.filter((item) => item !== id) : [...current, id],
+    );
+  };
+
   return (
     <div className="tree">
-      <div className="tree-node">
+      <div className="tree-root">
+        <span className="tree-dot static" aria-hidden="true" />
         <strong>My Documents</strong>
       </div>
-      {grouped.map((group) => (
-        <div key={group.category.id} className="tree-node">
-          <div className="tree-row">
-            <span>
-              ├── {group.category.label} (
-              {group.types.reduce((sum, entry) => sum + entry.docs.length, 0)})
-            </span>
-          </div>
-          {group.types.map((entry, index) => (
-            <div key={entry.type.id} className="tree-node" style={{ paddingLeft: 28 }}>
-              <div className="tree-row">
-                <span>
-                  {index === group.types.length - 1 ? "└── " : "├── "}
-                  {entry.type.folderName} ({entry.docs.length})
-                </span>
+      <ul className="tree-list">
+        {grouped.map((group) => {
+          const categoryOpen = openCategories.includes(group.category.id);
+          const count = group.types.reduce((sum, entry) => sum + entry.docs.length, 0);
+          return (
+            <li key={group.category.id} className="tree-item">
+              <div className="tree-line">
+                <button
+                  type="button"
+                  className={`tree-dot${categoryOpen ? " open" : ""}`}
+                  aria-expanded={categoryOpen}
+                  aria-label={`${categoryOpen ? "Collapse" : "Expand"} ${group.category.label}`}
+                  onClick={() => toggleCategory(group.category.id)}
+                />
+                <button type="button" className="tree-name" onClick={() => toggleCategory(group.category.id)}>
+                  {group.category.label} ({count})
+                </button>
               </div>
-              {entry.docs.map((doc, docIndex) => (
-                <div key={doc.id} className="tree-node" style={{ paddingLeft: 48 }}>
-                  <button className="tree-row" onClick={() => onSelect(doc.id)}>
-                    <span className="tree-label">
-                      {docIndex === entry.docs.length - 1 ? "└── " : "├── "}
-                      {doc.period ?? doc.title} {doc.isCurrent ? "✅ Current" : ""}
-                    </span>
-                    <span className="tree-loc">
-                      {doc.storageKind === "stored" ? "📍 Stored locally in ScannedOnArrival" : `📍 ${doc.locationLabel}`}
-                    </span>
-                  </button>
-                </div>
-              ))}
-            </div>
-          ))}
-        </div>
-      ))}
+              {categoryOpen && (
+                <ul className="tree-list">
+                  {group.types.map((entry) => {
+                    const typeOpen = openTypes.includes(entry.type.id);
+                    const hasDocs = entry.docs.length > 0;
+                    return (
+                      <li key={entry.type.id} className="tree-item">
+                        <div className="tree-line">
+                          {hasDocs ? (
+                            <button
+                              type="button"
+                              className={`tree-dot${typeOpen ? " open" : ""}`}
+                              aria-expanded={typeOpen}
+                              aria-label={`${typeOpen ? "Collapse" : "Expand"} ${entry.type.folderName}`}
+                              onClick={() => toggleType(entry.type.id)}
+                            />
+                          ) : (
+                            <span className="tree-dot leaf" aria-hidden="true" />
+                          )}
+                          {hasDocs ? (
+                            <button type="button" className="tree-name" onClick={() => toggleType(entry.type.id)}>
+                              {entry.type.folderName} ({entry.docs.length})
+                            </button>
+                          ) : (
+                            <span className="tree-name">
+                              {entry.type.folderName} ({entry.docs.length})
+                            </span>
+                          )}
+                        </div>
+                        {typeOpen && (
+                          <ul className="tree-list">
+                            {entry.docs.map((doc) => (
+                              <li key={doc.id} className="tree-item">
+                                <div className="tree-line">
+                                  <span className="tree-dot leaf" aria-hidden="true" />
+                                  <button type="button" className="tree-name file" onClick={() => onSelect(doc.id)}>
+                                    <span className="tree-label">
+                                      {doc.period ?? doc.title} {doc.isCurrent ? "✅ Current" : ""}
+                                    </span>
+                                    <span className="tree-loc">
+                                      {doc.storageKind === "stored"
+                                        ? "📍 Stored locally in ScannedOnArrival"
+                                        : `📍 ${doc.locationLabel}`}
+                                    </span>
+                                  </button>
+                                </div>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }
@@ -2427,7 +2536,7 @@ function SettingsView({
         <p className="meta">
           ScannedOnArrival runs in Safari, Chrome or Edge. It is not an App Store app. When we say scan, we
           mean your phone’s camera in this page — not a hardware scanner. On a computer you can still upload
-          PDFs; to photograph paper, open this same site on your phone, or scan the QR on Ready.
+          PDFs; to photograph paper, open this same site on your phone, or scan the QR on Scan and Docs.
         </p>
       </div>
       <div className="card">
@@ -2483,7 +2592,7 @@ function SettingsView({
       <div className="card">
         <h2>Reminders</h2>
         <p className="meta">
-          When something is outdated or about to expire, Ready lists it. If you allow notifications, this browser
+          When something is outdated or about to expire, Scan and Docs lists it. If you allow notifications, this browser
           can also remind you once a day — best after Add to Home Screen, especially on iPhone.
         </p>
         <button
