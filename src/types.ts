@@ -103,6 +103,13 @@ export interface FoundEmailDoc {
   period?: string;
   mailbox: "gmail" | "outlook";
   added: boolean;
+  from?: string;
+  subject?: string;
+  receivedAt?: string;
+  attachmentName?: string;
+  contentType?: string;
+  messageId?: string;
+  attachmentId?: string;
 }
 
 export interface CustomTypeDef {

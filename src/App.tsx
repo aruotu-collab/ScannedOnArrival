@@ -29,6 +29,22 @@ import {
   mintInboxAddress,
   withoutSampleInbox,
 } from "./lib/inbox";
+import {
+  connectGmail,
+  disconnectGmail,
+  downloadGmailAttachment,
+  gmailConnectAvailable,
+  gmailHasSession,
+  listGmailDocuments,
+} from "./lib/gmail";
+import {
+  connectOutlook,
+  disconnectOutlook,
+  downloadOutlookAttachment,
+  listOutlookDocuments,
+  outlookConnectAvailable,
+  outlookHasSession,
+} from "./lib/outlook";
 import { computeStatus, isSuperseded, locationLine } from "./data/status";
 import {
   blobLooksLikePdf,
@@ -80,6 +96,10 @@ const DEFAULT_SETTINGS: AppSettings = {
 };
 
 const DEFAULT_CROP: CropInsets = { top: 4, right: 4, bottom: 4, left: 4 };
+
+function isMailboxAdd(method: SourceKind) {
+  return method === "email-forward" || method === "email-connect";
+}
 const DEMO_DOC_ID = "demo-try-scan";
 const DEMO_PAGE_LIMIT = 3;
 const NAV_ITEMS: Array<{ id: ViewId; label: string; short: string }> = [
@@ -294,8 +314,9 @@ export default function App() {
   const [incomingFile, setIncomingFile] = useState<File | null>(null);
   const [incomingMethod, setIncomingMethod] = useState<SourceKind | null>(null);
   const [pendingInboxItem, setPendingInboxItem] = useState<InboxItem | null>(null);
+  const [pendingFoundItem, setPendingFoundItem] = useState<FoundEmailDoc | null>(null);
   const [inboxBusyId, setInboxBusyId] = useState<string | null>(null);
-  const [inboxBusyKind, setInboxBusyKind] = useState<"confirm" | "remove" | null>(null);
+  const [inboxBusyKind, setInboxBusyKind] = useState<"confirm" | "remove" | "mailbox" | null>(null);
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [demoLanding, setDemoLanding] = useState(false);
@@ -412,6 +433,7 @@ export default function App() {
     setIncomingFile(null);
     setIncomingMethod(null);
     setPendingInboxItem(null);
+    setPendingFoundItem(null);
     setIntendedTypeId(typeId ?? null);
     setAddStart(start);
     setAddOpen(true);
@@ -612,13 +634,18 @@ export default function App() {
     setView("documents");
     let toastMessage = `${record.title} added`;
     const pending = pendingInboxItem;
+    const found = pendingFoundItem;
     setPendingInboxItem(null);
+    setPendingFoundItem(null);
     if (pending) {
       if (pending.emailId) {
         const dropped = await confirmInboxFile(pending, settings.inboxAddress);
         if (!dropped) toastMessage = "Saved locally. The server copy may still be waiting to drop.";
       }
       await persistInbox(inbox.map((row) => (row.id === pending.id ? { ...row, status: "added" } : row)));
+    }
+    if (found) {
+      setFoundEmail((rows) => rows.map((row) => (row.id === found.id ? { ...row, added: true } : row)));
     }
     setToast(toastMessage);
   };
@@ -665,6 +692,82 @@ export default function App() {
       }
       await persistInbox(inbox.map((row) => (row.id === item.id ? { ...row, status: "dismissed" } : row)));
       setToast("Removed without saving");
+    } finally {
+      setInboxBusyId(null);
+      setInboxBusyKind(null);
+    }
+  };
+
+  const connectMailbox = async (mailbox: "gmail" | "outlook") => {
+    if (inboxBusyId) return;
+    setInboxBusyId(mailbox);
+    setInboxBusyKind("mailbox");
+    try {
+      const extra =
+        mailbox === "gmail"
+          ? await (async () => {
+              await connectGmail();
+              return listGmailDocuments();
+            })()
+          : await (async () => {
+              await connectOutlook();
+              return listOutlookDocuments();
+            })();
+      setFoundEmail((current) => {
+        const kept = current.filter((item) => item.mailbox !== mailbox || item.added);
+        const keptIds = new Set(kept.map((item) => item.id));
+        return [...extra.filter((item) => !keptIds.has(item.id)), ...kept];
+      });
+      await persistSettings({
+        ...settings,
+        gmailConnected: mailbox === "gmail" ? true : settings.gmailConnected,
+        outlookConnected: mailbox === "outlook" ? true : settings.outlookConnected,
+      });
+      setToast(
+        extra.length
+          ? `Found ${extra.length} recent ${mailbox === "gmail" ? "Gmail" : "Outlook"} document${extra.length === 1 ? "" : "s"}`
+          : `No recent PDF attachments in ${mailbox === "gmail" ? "Gmail" : "Outlook"}`,
+      );
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Could not connect that mailbox.");
+    } finally {
+      setInboxBusyId(null);
+      setInboxBusyKind(null);
+    }
+  };
+
+  const disconnectMailbox = async (mailbox: "gmail" | "outlook") => {
+    if (mailbox === "gmail") await disconnectGmail();
+    else await disconnectOutlook();
+    setFoundEmail((current) => current.filter((item) => item.mailbox !== mailbox || item.added));
+    await persistSettings({
+      ...settings,
+      gmailConnected: mailbox === "gmail" ? false : settings.gmailConnected,
+      outlookConnected: mailbox === "outlook" ? false : settings.outlookConnected,
+    });
+    setToast(`${mailbox === "gmail" ? "Gmail" : "Outlook"} disconnected on this device`);
+  };
+
+  const addFromMailbox = async (item: FoundEmailDoc) => {
+    if (inboxBusyId) return;
+    setInboxBusyId(item.id);
+    setInboxBusyKind("mailbox");
+    try {
+      const file =
+        item.mailbox === "gmail" ? await downloadGmailAttachment(item) : await downloadOutlookAttachment(item);
+      if (!file) {
+        setToast("Could not download that attachment yet");
+        return;
+      }
+      setPendingInboxItem(null);
+      setPendingFoundItem(item);
+      setIncomingFile(file);
+      setIncomingMethod("email-connect");
+      setIntendedTypeId(null);
+      setAddStart("choose");
+      setAddOpen(true);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "Could not open that attachment.");
     } finally {
       setInboxBusyId(null);
       setInboxBusyKind(null);
@@ -871,31 +974,22 @@ export default function App() {
               busyKind={inboxBusyKind}
               onAddMail={(file) => {
                 setPendingInboxItem(null);
+                setPendingFoundItem(null);
                 setIntendedTypeId(null);
                 setIncomingMethod("email-forward");
                 setIncomingFile(file);
                 setAddStart("choose");
                 setAddOpen(true);
               }}
-              onAddFound={async (item) => {
-                const type = typeById(item.typeId);
-                await addDocument(
-                  {
-                    method: "email-connect",
-                    title: item.title,
-                    typeId: item.typeId,
-                    categoryId: type.categoryId,
-                    period: item.period ?? "",
-                    issuedOn: "",
-                    expiresOn: "",
-                    storageKind: "referenced",
-                    locationLabel: `${item.mailbox === "gmail" ? "Gmail" : "Outlook"} attachment`,
-                    locationProvider: "email",
-                  },
-                  true,
-                );
-                setFoundEmail(foundEmail.map((row) => (row.id === item.id ? { ...row, added: true } : row)));
-              }}
+              onConnectGmail={() => void connectMailbox("gmail")}
+              onConnectOutlook={() => void connectMailbox("outlook")}
+              onDisconnectGmail={() => void disconnectMailbox("gmail")}
+              onDisconnectOutlook={() => void disconnectMailbox("outlook")}
+              onAddFound={addFromMailbox}
+              gmailReady={gmailConnectAvailable()}
+              outlookReady={outlookConnectAvailable()}
+              gmailConnected={gmailHasSession() || settings.gmailConnected}
+              outlookConnected={outlookHasSession() || settings.outlookConnected}
               onToast={setToast}
             />
           )}
@@ -977,6 +1071,7 @@ export default function App() {
             setIncomingFile(null);
             setIncomingMethod(null);
             setPendingInboxItem(null);
+            setPendingFoundItem(null);
             setIntendedTypeId(null);
             setAddStart("choose");
           }}
@@ -2733,6 +2828,14 @@ function InboxView({
   busyKind,
   onAddFound,
   onAddMail,
+  onConnectGmail,
+  onConnectOutlook,
+  onDisconnectGmail,
+  onDisconnectOutlook,
+  gmailReady,
+  outlookReady,
+  gmailConnected,
+  outlookConnected,
   onToast,
 }: {
   settings: AppSettings;
@@ -2744,9 +2847,17 @@ function InboxView({
   onConfirm: (item: InboxItem) => Promise<void>;
   onRemove: (item: InboxItem) => Promise<void>;
   confirmingId: string | null;
-  busyKind: "confirm" | "remove" | null;
+  busyKind: "confirm" | "remove" | "mailbox" | null;
   onAddFound: (item: FoundEmailDoc) => Promise<void>;
   onAddMail: (file: File) => void;
+  onConnectGmail: () => void;
+  onConnectOutlook: () => void;
+  onDisconnectGmail: () => void;
+  onDisconnectOutlook: () => void;
+  gmailReady: boolean;
+  outlookReady: boolean;
+  gmailConnected: boolean;
+  outlookConnected: boolean;
   onToast: (msg: string) => void;
 }) {
   const pending = inbox.filter((i) => i.status === "pending");
@@ -2896,27 +3007,76 @@ function InboxView({
       <div className="card">
         <h3>Optional Gmail or Outlook</h3>
         <p className="meta">
-          Connecting a mailbox is the next phase. Those buttons are not live yet — they will never be required.
+          Never required. This stays on this device: you sign in with Google or Microsoft in this browser, we look
+          for recent PDF attachments here, then you choose what to add. ScannedOnArrival does not receive your
+          mailbox. Forwarding still works without this.
         </p>
+        {(!gmailReady || !outlookReady) && (
+          <p className="meta" style={{ marginTop: 10 }}>
+            {!gmailReady && !outlookReady
+              ? "Mailbox connect is not configured on this site yet. Use forward-to-inbox until it is."
+              : !gmailReady
+                ? "Gmail connect is not configured on this site yet."
+                : "Outlook connect is not configured on this site yet."}
+          </p>
+        )}
         <div className="row" style={{ marginTop: 12 }}>
-          <button className="secondary" type="button" disabled>
-            Connect Gmail
+          <button
+            className="secondary"
+            type="button"
+            disabled={!gmailReady || confirmingId !== null}
+            onClick={onConnectGmail}
+          >
+            {confirmingId === "gmail" && busyKind === "mailbox"
+              ? "Looking…"
+              : gmailConnected
+                ? "Look in Gmail again"
+                : "Connect Gmail"}
           </button>
-          <button className="secondary" type="button" disabled>
-            Connect Outlook
+          {gmailConnected && (
+            <button className="danger" type="button" disabled={confirmingId !== null} onClick={onDisconnectGmail}>
+              Disconnect Gmail
+            </button>
+          )}
+        </div>
+        <div className="row" style={{ marginTop: 10 }}>
+          <button
+            className="secondary"
+            type="button"
+            disabled={!outlookReady || confirmingId !== null}
+            onClick={onConnectOutlook}
+          >
+            {confirmingId === "outlook" && busyKind === "mailbox"
+              ? "Looking…"
+              : outlookConnected
+                ? "Look in Outlook again"
+                : "Connect Outlook"}
           </button>
+          {outlookConnected && (
+            <button className="danger" type="button" disabled={confirmingId !== null} onClick={onDisconnectOutlook}>
+              Disconnect Outlook
+            </button>
+          )}
         </div>
         {foundEmail.length > 0 && (
           <div className="list" style={{ marginTop: 16 }}>
             <h3>We found {foundEmail.length} recent documents</h3>
             {foundEmail.map((item) => (
               <div key={item.id} className="inbox-item">
-                <div className="meta">
-                  {item.title}
-                  {item.period ? ` · ${item.period}` : ""}
+                <div>
+                  <strong>{item.title}</strong>
+                  <p className="meta">
+                    {item.mailbox === "gmail" ? "Gmail" : "Outlook"}
+                    {item.attachmentName ? ` · ${item.attachmentName}` : ""}
+                    {item.period ? ` · ${item.period}` : ""}
+                  </p>
                 </div>
-                <button className="secondary" disabled={item.added} onClick={() => onAddFound(item)}>
-                  {item.added ? "Added" : "Add"}
+                <button
+                  className="primary"
+                  disabled={item.added || confirmingId !== null}
+                  onClick={() => void onAddFound(item)}
+                >
+                  {item.added ? "Added" : confirmingId === item.id && busyKind === "mailbox" ? "Opening…" : "Add"}
                 </button>
               </div>
             ))}
@@ -3235,19 +3395,21 @@ function AddDocumentModal({
         expiresOn: classified.expiresOn ?? "",
         storageKind,
         locationLabel:
-          method === "email-forward"
-            ? "Stored locally after inbox processing"
+          isMailboxAdd(method)
+            ? method === "email-connect"
+              ? "Stored locally from your mailbox"
+              : "Stored locally after inbox processing"
             : storageKind === "stored"
               ? "Stored locally in ScannedOnArrival"
               : `${file.name} from Files`,
         locationProvider:
-          method === "email-forward" ? "email" : storageKind === "stored" ? "local" : "files",
+          isMailboxAdd(method) ? "email" : storageKind === "stored" ? "local" : "files",
         fileName: pdfFile ? file.name : pagesToStore[0].name,
         mimeType: pagesToStore[0].type,
       });
       setDraft(next);
       setExpiryMode(next.expiresOn ? "date" : "na");
-      const reviewFirst = method === "email-forward";
+      const reviewFirst = isMailboxAdd(method);
       const canAuto =
         !reviewFirst && method !== "camera" && classified.typeId !== "other" && classified.confidence !== "low" && !intendedType;
       if (canAuto) {
@@ -3361,7 +3523,7 @@ function AddDocumentModal({
 
   const continueFromForm = () => {
     if (!draft) return;
-    if (draft.method === "email-forward") {
+    if (isMailboxAdd(draft.method)) {
       void submit(true);
       return;
     }
@@ -3583,7 +3745,7 @@ function AddDocumentModal({
         {step === "form" && draft && (
           <>
             <h2>Confirm what this is</h2>
-            {draft.method === "email-forward" && (
+            {isMailboxAdd(draft.method) && (
               <p className="meta">
                 Choose the category and document type, then whether this should be the current version or an extra
                 copy.
@@ -3594,7 +3756,7 @@ function AddDocumentModal({
                 <img src={draft.previewUrl} alt={draft.title || "Document page"} />
               </div>
             )}
-            {draft.method === "email-forward" && documents.find((d) => d.typeId === draft.typeId && d.isCurrent && d.typeId !== "other") && (
+            {isMailboxAdd(draft.method) && documents.find((d) => d.typeId === draft.typeId && d.isCurrent && d.typeId !== "other") && (
               <div className="notice">
                 Setting this as current moves your older {typeById(draft.typeId).label} copy into Previous versions. Keep
                 as another relevant copy leaves that current version in place, and this one stays in date.
@@ -3830,7 +3992,7 @@ function AddDocumentModal({
               <button className="secondary" onClick={onClose}>
                 Cancel
               </button>
-              {draft.method === "email-forward" ? (
+              {isMailboxAdd(draft.method) ? (
                 <>
                   <button className="secondary" onClick={() => void submit(false)} disabled={!draft.title}>
                     Keep as another relevant copy
