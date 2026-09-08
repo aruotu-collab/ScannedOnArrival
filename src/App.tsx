@@ -905,10 +905,12 @@ function DemoView({
   const [error, setError] = useState<string | null>(null);
   const [title, setTitle] = useState("Council Tax 2026–27");
   const [period, setPeriod] = useState("2026–27");
-  const swipeStart = useRef<{ x: number; y: number } | null>(null);
+  const swipeStart = useRef<{ x: number; y: number; page: number } | null>(null);
   const swiped = useRef(false);
   const pagesRef = useRef(pages);
   const captureLock = useRef(false);
+  const [dragX, setDragX] = useState(0);
+  const [dragging, setDragging] = useState(false);
   pagesRef.current = pages;
 
   const currentPage = pages[activePage];
@@ -978,24 +980,42 @@ function DemoView({
   };
 
   const goToPage = (next: number) => {
-    setActivePage(Math.max(0, Math.min(pages.length - 1, next)));
+    setActivePage(Math.max(0, Math.min(pagesRef.current.length - 1, next)));
+  };
+
+  const endPageDrag = (event: PointerEvent<HTMLDivElement>) => {
+    const start = swipeStart.current;
+    swipeStart.current = null;
+    setDragging(false);
+    setDragX(0);
+    if (!start || pagesRef.current.length < 2) return;
+    const dx = event.clientX - start.x;
+    const dy = event.clientY - start.y;
+    const width = event.currentTarget.clientWidth || 1;
+    if (Math.abs(dx) < Math.max(28, width * 0.12) || Math.abs(dx) <= Math.abs(dy)) return;
+    swiped.current = true;
+    goToPage(start.page + (dx < 0 ? 1 : -1));
   };
 
   const onPagePointerDown = (event: PointerEvent<HTMLDivElement>) => {
-    if (pages.length < 2) return;
-    swipeStart.current = { x: event.clientX, y: event.clientY };
+    if (pagesRef.current.length < 2) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    swipeStart.current = { x: event.clientX, y: event.clientY, page: activePage };
     swiped.current = false;
+    setDragging(true);
+    setDragX(0);
   };
 
-  const onPagePointerUp = (event: PointerEvent<HTMLDivElement>) => {
+  const onPagePointerMove = (event: PointerEvent<HTMLDivElement>) => {
     const start = swipeStart.current;
-    swipeStart.current = null;
-    if (!start || pages.length < 2) return;
+    if (!start) return;
     const dx = event.clientX - start.x;
     const dy = event.clientY - start.y;
-    if (Math.abs(dx) < 40 || Math.abs(dx) <= Math.abs(dy)) return;
-    swiped.current = true;
-    goToPage(activePage + (dx < 0 ? 1 : -1));
+    if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return;
+    if (Math.abs(dx) <= Math.abs(dy)) return;
+    const atStart = start.page === 0 && dx > 0;
+    const atEnd = start.page === pagesRef.current.length - 1 && dx < 0;
+    setDragX(atStart || atEnd ? dx * 0.28 : dx);
   };
 
   const dropPage = () => {
@@ -1114,22 +1134,27 @@ function DemoView({
           <div
             className={`demo-page-rail ${pages.length > 1 ? "swipeable" : ""}`}
             onPointerDown={onPagePointerDown}
-            onPointerUp={onPagePointerUp}
-            onPointerCancel={() => {
-              swipeStart.current = null;
-            }}
+            onPointerMove={onPagePointerMove}
+            onPointerUp={endPageDrag}
+            onPointerCancel={endPageDrag}
           >
             <div
-              className="demo-page-track"
-              style={{ transform: `translateX(-${activePage * 100}%)` }}
+              className={`demo-page-track${dragging ? " dragging" : ""}`}
+              style={{ transform: `translateX(calc(-${activePage * 100}% + ${dragX}px))` }}
             >
               {pages.map((page, index) => (
-                <button
+                <div
                   key={page.id}
-                  type="button"
+                  role="button"
+                  tabIndex={0}
                   className="demo-review-page"
                   onClick={() => {
                     if (swiped.current) return;
+                    setViewerOpen(true);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter" && event.key !== " ") return;
+                    event.preventDefault();
                     setViewerOpen(true);
                   }}
                 >
@@ -1138,7 +1163,7 @@ function DemoView({
                     Demo
                   </span>
                   {pages.length > 1 && <span className="demo-page-index">Page {index + 1}</span>}
-                </button>
+                </div>
               ))}
             </div>
           </div>
