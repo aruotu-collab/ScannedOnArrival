@@ -21,6 +21,7 @@
   --radius: 18px;
   --font-ui: "Plus Jakarta Sans", system-ui, sans-serif;
   --font-display: "Fraunces", Georgia, serif;
+  --nameplate-offset: calc(29px + env(safe-area-inset-top, 0px) + 8px);
 }
 
 * {
@@ -36,8 +37,12 @@ body,
 
 html,
 body {
-  overflow-x: hidden;
+  overflow-x: clip;
   overscroll-behavior-x: none;
+}
+
+html {
+  scroll-padding-top: var(--nameplate-offset);
 }
 
 body {
@@ -66,7 +71,7 @@ button {
   grid-template-columns: 260px 1fr;
   grid-template-rows: auto 1fr;
   max-width: 100%;
-  overflow-x: hidden;
+  overflow-x: clip;
   padding-top: calc(29px + env(safe-area-inset-top, 0px));
 }
 
@@ -919,8 +924,8 @@ button {
   background: rgba(27, 25, 20, 0.42);
   display: grid;
   place-items: center;
-  padding: 20px;
-  z-index: 20;
+  padding: max(20px, env(safe-area-inset-top, 0px)) 20px max(20px, env(safe-area-inset-bottom, 0px));
+  z-index: 50;
 }
 
 .modal {
@@ -1122,10 +1127,16 @@ button {
 .file-viewer-bar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 12px;
   padding: calc(10px + env(safe-area-inset-top, 0px)) 12px 10px;
   border-bottom: 1px solid var(--line);
   background: var(--cream);
+}
+
+.file-viewer-bar .primary,
+.file-viewer-bar .secondary {
+  flex-shrink: 0;
 }
 
 .file-viewer-bar strong {
@@ -1471,7 +1482,7 @@ button {
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   overflow: hidden;
-  scroll-margin-top: calc(29px + env(safe-area-inset-top, 0px) + 12px);
+  scroll-margin-top: var(--nameplate-offset);
 }
 
 .doc-category {
@@ -1497,8 +1508,7 @@ button {
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   margin: 0 0 14px;
-  overflow: hidden;
-  scroll-margin-top: calc(29px + env(safe-area-inset-top, 0px) + 12px);
+  scroll-margin-top: var(--nameplate-offset);
 }
 
 .doc-category-card.selected {
@@ -1518,8 +1528,13 @@ button {
 }
 
 .doc-category-card.selected .doc-category-card-head {
+  position: sticky;
+  top: var(--nameplate-offset);
+  z-index: 6;
   align-items: flex-start;
-  background: rgba(47, 122, 88, 0.12);
+  background: color-mix(in srgb, #f3ead9 88%, var(--moss) 12%);
+  border-radius: var(--radius) var(--radius) 0 0;
+  box-shadow: 0 10px 18px rgba(27, 25, 20, 0.06);
 }
 
 .doc-category-card-select {
@@ -1677,12 +1692,7 @@ button {
 }
 
 .doc-category-body-inner {
-  transform: translateY(-100%);
-  transition: transform 0.32s ease;
-}
-
-.doc-category-body.open .doc-category-body-inner {
-  transform: translateY(0);
+  transform: none;
 }
 
 .doc-type-tabs {
@@ -2256,7 +2266,7 @@ button {
     grid-template-columns: 1fr;
     padding-top: calc(52px + env(safe-area-inset-top, 0px));
     padding-bottom: calc(76px + env(safe-area-inset-bottom, 0px));
-    overflow-x: hidden;
+    overflow-x: clip;
   }
 
   .app-nameplate {
@@ -2272,9 +2282,19 @@ button {
     height: 24px;
   }
 
+  :root {
+    --nameplate-offset: calc(52px + env(safe-area-inset-top, 0px) + 8px);
+  }
+
   .doc-category-card,
   .doc-type-card {
-    scroll-margin-top: calc(52px + env(safe-area-inset-top, 0px) + 12px);
+    scroll-margin-top: var(--nameplate-offset);
+  }
+
+  .toast {
+    left: 16px;
+    right: 16px;
+    bottom: calc(76px + env(safe-area-inset-bottom, 0px) + 8px);
   }
 
   .sidebar {
@@ -2344,7 +2364,7 @@ button {
   }
 
   .content {
-    overflow-x: hidden;
+    overflow-x: clip;
   }
 
   .card,

@@ -378,6 +378,22 @@ export default function App() {
   }, [toast]);
 
   useEffect(() => {
+    if (!hydrated || !settings.onboardingComplete) return;
+    const sync = () => {
+      syncNameplateOffset();
+    };
+    sync();
+    window.addEventListener("resize", sync);
+    window.visualViewport?.addEventListener("resize", sync);
+    window.visualViewport?.addEventListener("scroll", sync);
+    return () => {
+      window.removeEventListener("resize", sync);
+      window.visualViewport?.removeEventListener("resize", sync);
+      window.visualViewport?.removeEventListener("scroll", sync);
+    };
+  }, [hydrated, settings.onboardingComplete]);
+
+  useEffect(() => {
     const onPrompt = (event: Event) => {
       event.preventDefault();
       setInstallPrompt(event as BeforeInstallPromptEvent);
@@ -549,6 +565,7 @@ export default function App() {
     const target = next === "ready" ? "documents" : next;
     if (view === "demo" && target === "documents") setFromDemoNav(true);
     setView(target);
+    documentsScroller().scrollTo({ top: 0, left: 0, behavior: "auto" });
   };
 
   const openRealThing = () => {
@@ -1834,33 +1851,28 @@ function documentsScroller() {
   return document.scrollingElement ?? document.documentElement;
 }
 
-function nameplateOffset() {
+function syncNameplateOffset() {
   const plate = document.querySelector(".app-nameplate");
   const bottom = plate instanceof HTMLElement ? plate.getBoundingClientRect().bottom : 0;
-  return Math.max(12, Math.round(bottom) + 14);
+  const offset = Math.max(12, Math.round(bottom) + 8);
+  document.documentElement.style.setProperty("--nameplate-offset", `${offset}px`);
+  return offset;
 }
 
-function scrollCategoryToTop(categoryId: string, behavior: ScrollBehavior) {
+function revealCategoryTitle(categoryId: string, smooth = true) {
   const card = document.getElementById(`category-${categoryId}`);
   if (!card) return;
+  const offset = syncNameplateOffset();
+  const top = card.getBoundingClientRect().top;
+  const overlap = offset - top;
+  if (overlap <= 1) return;
   const scroller = documentsScroller();
-  const top = Math.max(0, scroller.scrollTop + card.getBoundingClientRect().top - nameplateOffset());
-  if (behavior === "auto" || prefersReducedMotion()) {
-    scroller.scrollTop = top;
-    return;
-  }
-  const start = scroller.scrollTop;
-  const delta = top - start;
-  if (Math.abs(delta) < 2) return;
-  const duration = 340;
-  const began = performance.now();
-  const step = (now: number) => {
-    const t = Math.min(1, (now - began) / duration);
-    const eased = 1 - (1 - t) ** 3;
-    scroller.scrollTop = start + delta * eased;
-    if (t < 1) window.requestAnimationFrame(step);
-  };
-  window.requestAnimationFrame(step);
+  const next = Math.max(0, scroller.scrollTop - overlap);
+  if (Math.abs(next - scroller.scrollTop) < 1) return;
+  scroller.scrollTo({
+    top: next,
+    behavior: smooth && !prefersReducedMotion() ? "smooth" : "auto",
+  });
 }
 
 function TypeTabStrip({
@@ -2028,13 +2040,9 @@ function DocumentsView({
       }
     }
 
-    const rise = () => scrollCategoryToTop(selectedCategoryId, prefersReducedMotion() ? "auto" : "smooth");
-    const frame = window.requestAnimationFrame(() => window.requestAnimationFrame(rise));
-    const retry = window.setTimeout(rise, 360);
-    return () => {
-      window.cancelAnimationFrame(frame);
-      window.clearTimeout(retry);
-    };
+    revealCategoryTitle(selectedCategoryId, false);
+    const retry = window.setTimeout(() => revealCategoryTitle(selectedCategoryId, false), 340);
+    return () => window.clearTimeout(retry);
   }, [selectedCategoryId]);
 
   return (
@@ -3786,7 +3794,7 @@ function AddDocumentModal({
     );
   }
 
-  return (
+  return createPortal(
     <div className="modal-back" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         {(busy || error) && (
@@ -4262,6 +4270,7 @@ function AddDocumentModal({
           </>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
