@@ -337,6 +337,7 @@ export default function App() {
   const [inboxReady, setInboxReady] = useState(false);
   const [docQuery, setDocQuery] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [focusDocId, setFocusDocId] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -644,6 +645,7 @@ export default function App() {
     setDocQuery("");
     setSelectedId(doc.id);
     setExpandedTypeId(doc.typeId);
+    setFocusDocId(doc.id);
     goToView("documents");
   };
 
@@ -1133,13 +1135,18 @@ export default function App() {
                     attention={attention}
                     onOpenAttention={(typeId, documentId) => {
                       setExpandedTypeId(typeId);
-                      if (documentId) setSelectedId(documentId);
+                      if (documentId) {
+                        setSelectedId(documentId);
+                        setFocusDocId(documentId);
+                      }
                     }}
                   />
                   <DocumentsView
                     documents={currentDocs}
                     allDocuments={documents}
                     expandedTypeId={expandedTypeId}
+                    focusDocId={focusDocId}
+                    onFocused={() => setFocusDocId(null)}
                     fromDemo={demoLanding}
                     onDismissDemo={() => setDemoLanding(false)}
                     onExpand={(typeId, documentId) => {
@@ -1172,6 +1179,7 @@ export default function App() {
                 const doc = documents.find((item) => item.id === id);
                 setSelectedId(id);
                 setExpandedTypeId(doc?.typeId ?? null);
+                setFocusDocId(id);
                 goToView("documents");
               }}
             />
@@ -1985,6 +1993,31 @@ function revealCategoryTitle(categoryId: string, smooth = true) {
   });
 }
 
+function focusOpenedCategory(categoryId: string, documentId?: string | null, smooth = true) {
+  const card = document.getElementById(`category-${categoryId}`);
+  if (!card) return false;
+  const offset = syncNameplateOffset();
+  const delta = card.getBoundingClientRect().top - offset;
+  const scroller = documentsScroller();
+  if (Math.abs(delta) > 2) {
+    scroller.scrollTo({
+      top: Math.max(0, scroller.scrollTop + delta),
+      behavior: smooth && !prefersReducedMotion() ? "smooth" : "auto",
+    });
+  }
+  if (documentId) {
+    const slide = document.getElementById(`doc-${documentId}`);
+    const rail = slide?.closest(".doc-rail");
+    if (slide instanceof HTMLElement && rail instanceof HTMLElement) {
+      rail.scrollTo({
+        left: slide.offsetLeft,
+        behavior: smooth && !prefersReducedMotion() ? "smooth" : "auto",
+      });
+    }
+  }
+  return true;
+}
+
 function TypeTabStrip({
   types,
   documents,
@@ -2141,6 +2174,8 @@ function DocumentsView({
   documents,
   allDocuments,
   expandedTypeId,
+  focusDocId,
+  onFocused,
   fromDemo,
   onDismissDemo,
   onExpand,
@@ -2154,6 +2189,8 @@ function DocumentsView({
   documents: DocumentRecord[];
   allDocuments: DocumentRecord[];
   expandedTypeId: string | null;
+  focusDocId?: string | null;
+  onFocused?: () => void;
   fromDemo?: boolean;
   onDismissDemo?: () => void;
   onExpand: (typeId: string | null, documentId?: string) => void;
@@ -2191,6 +2228,8 @@ function DocumentsView({
   const selectedCategoryId =
     catalog.find((group) => group.category.id === selectedType?.categoryId)?.category.id ?? null;
   const pendingPin = useRef<{ id: string; y: number } | null>(null);
+  const onFocusedRef = useRef(onFocused);
+  onFocusedRef.current = onFocused;
 
   const selectType = (typeId: string, pinY?: number) => {
     const categoryId = typeById(typeId).categoryId;
@@ -2234,6 +2273,23 @@ function DocumentsView({
     const retry = window.setTimeout(() => revealCategoryTitle(selectedCategoryId, false), 340);
     return () => window.clearTimeout(retry);
   }, [selectedCategoryId]);
+
+  useLayoutEffect(() => {
+    if (!focusDocId || !selectedCategoryId) return;
+    const categoryId = selectedCategoryId;
+    const documentId = focusDocId;
+    const run = (smooth: boolean) => focusOpenedCategory(categoryId, documentId, smooth);
+    run(false);
+    const frame = window.requestAnimationFrame(() => run(false));
+    const retry = window.setTimeout(() => {
+      run(!prefersReducedMotion());
+      onFocusedRef.current?.();
+    }, 360);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(retry);
+    };
+  }, [focusDocId, selectedCategoryId]);
 
   return (
     <>
@@ -2332,7 +2388,7 @@ function DocumentsView({
                     {current && (
                       <div className="doc-rail" aria-label={`${activeType.label} copies`}>
                         {copies.map((doc) => (
-                          <div key={doc.id} className="doc-slide">
+                          <div key={doc.id} id={`doc-${doc.id}`} className="doc-slide">
                             <DocumentDetail
                               doc={doc}
                               previous={copies.filter((item) => item.id !== doc.id)}
