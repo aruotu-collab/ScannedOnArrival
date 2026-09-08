@@ -15,6 +15,7 @@ import type {
 import {
   allCategories,
   allTypes,
+  categoryLabel,
   setCatalogExtras,
   suggestedPath,
   typeById,
@@ -47,6 +48,11 @@ import {
 } from "./lib/outlook";
 import { mailboxRef, rememberFoundEmail } from "./lib/mailbox";
 import { computeStatus, isSuperseded, locationLine } from "./data/status";
+import {
+  formatCheckedDate,
+  isCheckedToday,
+  searchDocuments,
+} from "./data/search";
 import {
   blobLooksLikePdf,
   extractPdfText,
@@ -329,6 +335,8 @@ export default function App() {
   const [demoLanding, setDemoLanding] = useState(false);
   const [fromDemoNav, setFromDemoNav] = useState(false);
   const [inboxReady, setInboxReady] = useState(false);
+  const [docQuery, setDocQuery] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -510,6 +518,43 @@ export default function App() {
     await saveInbox(next);
   };
 
+  const markChecked = async (id: string) => {
+    const next = documents.map((doc) => (doc.id === id ? { ...doc, lastChecked: todayIso() } : doc));
+    await persistDocs(next);
+    setToast("Marked as checked today");
+  };
+
+  const saveEditedDocument = async (
+    original: DocumentRecord,
+    next: DocumentRecord,
+    makeCurrent: boolean,
+  ) => {
+    const updated: DocumentRecord = {
+      ...next,
+      period: next.period || undefined,
+      issuedOn: next.issuedOn || undefined,
+      expiresOn: next.expiresOn || undefined,
+      notes: next.notes?.trim() || undefined,
+      isCurrent: makeCurrent,
+      supersededBy: makeCurrent ? undefined : next.supersededBy,
+    };
+    const saved = documents.map((doc) => {
+      if (doc.id === original.id) return updated;
+      if (makeCurrent && doc.typeId === updated.typeId && doc.isCurrent) {
+        return { ...doc, isCurrent: false, supersededBy: original.id };
+      }
+      if (!makeCurrent && doc.supersededBy === original.id) {
+        return { ...doc, supersededBy: undefined };
+      }
+      return doc;
+    });
+    await persistDocs(saved);
+    setEditingId(null);
+    setSelectedId(updated.id);
+    setExpandedTypeId(updated.typeId);
+    setToast("Listing updated");
+  };
+
   useEffect(() => {
     if (!hydrated || settings.privacyMode !== "inbox") {
       setInboxReady(false);
@@ -540,6 +585,9 @@ export default function App() {
 
   const currentDocs = documents.filter((d) => d.isCurrent);
   const attention = useMemo(() => listAttention(documents), [documents]);
+  const searchHits = useMemo(() => searchDocuments(documents, docQuery), [documents, docQuery]);
+  const searching = Boolean(docQuery.trim());
+  const editingDoc = editingId ? documents.find((doc) => doc.id === editingId) ?? null : null;
 
   useEffect(() => {
     if (!hydrated || !settings.notificationsEnabled) return;
@@ -590,6 +638,13 @@ export default function App() {
     }
     document.documentElement.classList.add("nav-css");
     apply();
+  };
+
+  const openSearchHit = (doc: DocumentRecord) => {
+    setDocQuery("");
+    setSelectedId(doc.id);
+    setExpandedTypeId(doc.typeId);
+    goToView("documents");
   };
 
   const openRealThing = () => {
@@ -1060,39 +1115,59 @@ export default function App() {
               onTryReal={openRealThing}
             />
           )}
+          {(view === "documents" || view === "ready" || view === "tree") && (
+            <DocumentSearch
+              value={docQuery}
+              onChange={setDocQuery}
+              resultCount={searching ? searchHits.length : undefined}
+            />
+          )}
           {(view === "documents" || view === "ready") && (
             <>
-              <HomeStatus
-                documents={documents}
-                attention={attention}
-                onOpenAttention={(typeId, documentId) => {
-                  setExpandedTypeId(typeId);
-                  if (documentId) setSelectedId(documentId);
-                }}
-              />
-              <DocumentsView
-                documents={currentDocs}
-                allDocuments={documents}
-                expandedTypeId={expandedTypeId}
-                fromDemo={demoLanding}
-                onDismissDemo={() => setDemoLanding(false)}
-                onExpand={(typeId, documentId) => {
-                  setExpandedTypeId(typeId);
-                  if (documentId) setSelectedId(documentId);
-                }}
-                onAdd={(typeId) => openAdd("choose", typeId)}
-                onScan={(typeId) => openAdd("camera", typeId)}
-                onDeleted={async (id) => {
-                  await deleteDocument(id);
-                  setDocuments(documents.filter((d) => d.id !== id));
-                  if (selectedId === id) setSelectedId(null);
-                }}
-              />
+              {searching ? (
+                <SearchResults documents={searchHits} onOpen={openSearchHit} />
+              ) : (
+                <>
+                  <HomeStatus
+                    documents={documents}
+                    attention={attention}
+                    onOpenAttention={(typeId, documentId) => {
+                      setExpandedTypeId(typeId);
+                      if (documentId) setSelectedId(documentId);
+                    }}
+                  />
+                  <DocumentsView
+                    documents={currentDocs}
+                    allDocuments={documents}
+                    expandedTypeId={expandedTypeId}
+                    fromDemo={demoLanding}
+                    onDismissDemo={() => setDemoLanding(false)}
+                    onExpand={(typeId, documentId) => {
+                      setExpandedTypeId(typeId);
+                      if (documentId) setSelectedId(documentId);
+                    }}
+                    onAdd={(typeId) => openAdd("choose", typeId)}
+                    onScan={(typeId) => openAdd("camera", typeId)}
+                    onEdit={(id) => setEditingId(id)}
+                    onChecked={(id) => void markChecked(id)}
+                    onCopyLocation={async (label) => {
+                      const ok = await copyText(label);
+                      setToast(ok ? "Location copied" : "Could not copy the location.");
+                    }}
+                    onDeleted={async (id) => {
+                      await deleteDocument(id);
+                      setDocuments(documents.filter((d) => d.id !== id));
+                      if (selectedId === id) setSelectedId(null);
+                    }}
+                  />
+                </>
+              )}
             </>
           )}
           {view === "tree" && (
             <TreeView
-              documents={documents}
+              documents={searching ? searchHits : documents}
+              query={docQuery}
               onSelect={(id) => {
                 const doc = documents.find((item) => item.id === id);
                 setSelectedId(id);
@@ -1222,6 +1297,15 @@ export default function App() {
             setAddStart("choose");
           }}
           onSave={addDocument}
+          onCreateCategory={createCategory}
+          onCreateType={createType}
+        />
+      )}
+      {editingDoc && (
+        <EditDocumentModal
+          doc={editingDoc}
+          onClose={() => setEditingId(null)}
+          onSave={saveEditedDocument}
           onCreateCategory={createCategory}
           onCreateType={createType}
         />
@@ -1979,6 +2063,80 @@ function TypeTabStrip({
   );
 }
 
+function DocumentSearch({
+  value,
+  onChange,
+  resultCount,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  resultCount?: number;
+}) {
+  return (
+    <div className="doc-search">
+      <label className="doc-search-field">
+        <span className="visually-hidden">Search documents</span>
+        <input
+          type="search"
+          placeholder="Search documents"
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          autoComplete="off"
+          enterKeyHint="search"
+        />
+        {value && (
+          <button type="button" className="doc-search-clear" onClick={() => onChange("")} aria-label="Clear search">
+            Clear
+          </button>
+        )}
+      </label>
+      {resultCount != null && (
+        <p className="meta">
+          {resultCount === 0 ? "No matches" : resultCount === 1 ? "1 match" : `${resultCount} matches`}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function SearchResults({
+  documents,
+  onOpen,
+}: {
+  documents: DocumentRecord[];
+  onOpen: (doc: DocumentRecord) => void;
+}) {
+  if (documents.length === 0) {
+    return (
+      <div className="card empty">
+        <h2>No matches</h2>
+        <p>Try a title, category, or folder name — like passport, council tax, or iCloud.</p>
+      </div>
+    );
+  }
+  return (
+    <div className="search-results">
+      {documents.map((doc) => {
+        const status = computeStatus(doc);
+        return (
+          <button key={doc.id} type="button" className="search-result" onClick={() => onOpen(doc)}>
+            <div className="search-result-top">
+              <strong>{doc.title}</strong>
+              <span className={`badge ${status === "current" && !doc.isCurrent ? "relevant" : status}`}>
+                {statusBadgeText(status, doc)}
+              </span>
+            </div>
+            <span className="meta">
+              {categoryLabel(doc.categoryId)} → {typeById(doc.typeId).label}
+              {doc.period ? ` · ${doc.period}` : ""} · Checked {formatCheckedDate(doc.lastChecked)}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function DocumentsView({
   documents,
   allDocuments,
@@ -1988,6 +2146,9 @@ function DocumentsView({
   onExpand,
   onAdd,
   onScan,
+  onEdit,
+  onChecked,
+  onCopyLocation,
   onDeleted,
 }: {
   documents: DocumentRecord[];
@@ -1998,6 +2159,9 @@ function DocumentsView({
   onExpand: (typeId: string | null, documentId?: string) => void;
   onAdd: (typeId: string) => void;
   onScan: (typeId: string) => void;
+  onEdit: (id: string) => void;
+  onChecked: (id: string) => void;
+  onCopyLocation: (label: string) => void;
   onDeleted: (id: string) => void;
 }) {
   const catalog = allCategories()
@@ -2173,6 +2337,9 @@ function DocumentsView({
                               doc={doc}
                               previous={copies.filter((item) => item.id !== doc.id)}
                               compact
+                              onEdit={() => onEdit(doc.id)}
+                              onChecked={() => onChecked(doc.id)}
+                              onCopyLocation={() => onCopyLocation(doc.locationLabel)}
                               onDeleted={() => onDeleted(doc.id)}
                             />
                           </div>
@@ -2636,11 +2803,17 @@ function DocumentDetail({
   doc,
   previous,
   compact,
+  onEdit,
+  onChecked,
+  onCopyLocation,
   onDeleted,
 }: {
   doc: DocumentRecord;
   previous: DocumentRecord[];
   compact?: boolean;
+  onEdit: () => void;
+  onChecked: () => void;
+  onCopyLocation: () => void;
   onDeleted: () => void;
 }) {
   const [pages, setPages] = useState<Array<{ url: string; image: boolean }>>([]);
@@ -2711,8 +2884,9 @@ function DocumentDetail({
       </div>
       <h2>{doc.title}</h2>
       <p className="meta">
-        {locationLine(doc)} · Checked {doc.lastChecked}
+        {locationLine(doc)} · Checked {formatCheckedDate(doc.lastChecked)}
       </p>
+      {doc.notes && <p className="meta">{doc.notes}</p>}
       {pagesLoading && pages.length === 0 && (
         <div className="preview preview-loading" role="status">
           Opening the document…
@@ -2760,9 +2934,14 @@ function DocumentDetail({
           onClose={() => setViewerAt(null)}
         />
       )}
-      {doc.storageKind === "referenced" && !compact && (
+      {doc.storageKind === "referenced" && (
         <div className="notice">
           The file stays in its original folder. This app only keeps the listing.
+          <div className="row" style={{ marginTop: 10 }}>
+            <button type="button" className="secondary" onClick={onCopyLocation}>
+              Copy location
+            </button>
+          </div>
         </div>
       )}
       {!compact && previous.filter(isSuperseded).length > 0 && (
@@ -2782,7 +2961,13 @@ function DocumentDetail({
           Swipe for {previous.length} other {previous.length === 1 ? "copy" : "copies"}.
         </p>
       )}
-      <div className="row" style={{ marginTop: 16 }}>
+      <div className="doc-detail-actions">
+        <button type="button" className="secondary" onClick={onChecked} disabled={isCheckedToday(doc.lastChecked)}>
+          {isCheckedToday(doc.lastChecked) ? "Checked today" : "Mark as checked"}
+        </button>
+        <button type="button" className="secondary" onClick={onEdit}>
+          Edit listing
+        </button>
         <button type="button" className="danger" onClick={() => setConfirmRemove(true)}>
           Remove this listing
         </button>
@@ -2805,13 +2990,16 @@ function DocumentDetail({
 
 function TreeView({
   documents,
+  query,
   onSelect,
 }: {
   documents: DocumentRecord[];
+  query?: string;
   onSelect: (id: string) => void;
 }) {
   const [openCategories, setOpenCategories] = useState<string[]>([]);
   const [openTypes, setOpenTypes] = useState<string[]>([]);
+  const searching = Boolean(query?.trim());
   const grouped = useMemo(() => {
     return allCategories().map((category) => {
       const types = allTypes().filter((t) => t.categoryId === category.id);
@@ -2824,10 +3012,16 @@ function TreeView({
               .filter((d) => d.typeId === type.id)
               .sort((a, b) => Number(b.isCurrent) - Number(a.isCurrent)),
           }))
-          .filter((t) => t.type.id !== "other" || t.docs.length),
+          .filter((t) => (searching ? t.docs.length > 0 : t.type.id !== "other" || t.docs.length)),
       };
-    }).filter((g) => g.types.some((t) => t.type.id !== "other" || t.docs.length));
-  }, [documents]);
+    }).filter((g) => (searching ? g.types.some((t) => t.docs.length > 0) : g.types.some((t) => t.type.id !== "other" || t.docs.length)));
+  }, [documents, searching]);
+
+  useEffect(() => {
+    if (!searching) return;
+    setOpenCategories([...new Set(documents.map((doc) => doc.categoryId))]);
+    setOpenTypes([...new Set(documents.map((doc) => doc.typeId))]);
+  }, [searching, documents]);
 
   const toggleCategory = (id: string) => {
     setOpenCategories((current) =>
@@ -2847,6 +3041,12 @@ function TreeView({
         <span className="tree-dot static" aria-hidden="true" />
         <strong>My Documents</strong>
       </div>
+      {searching && grouped.length === 0 && (
+        <div className="card empty">
+          <h2>No matches</h2>
+          <p>Try a title, category, or folder name — like passport, council tax, or iCloud.</p>
+        </div>
+      )}
       <ul className="tree-list">
         {grouped.map((group) => {
           const categoryOpen = openCategories.includes(group.category.id);
@@ -3512,6 +3712,314 @@ function SettingsView({
         </button>
       </div>
     </div>
+  );
+}
+
+function EditDocumentModal({
+  doc,
+  onClose,
+  onSave,
+  onCreateCategory,
+  onCreateType,
+}: {
+  doc: DocumentRecord;
+  onClose: () => void;
+  onSave: (original: DocumentRecord, next: DocumentRecord, makeCurrent: boolean) => Promise<void>;
+  onCreateCategory: (label: string) => Promise<{ categoryId: string; typeId: string }>;
+  onCreateType: (label: string, categoryId: string) => Promise<{ typeId: string; categoryId: string }>;
+}) {
+  const [draft, setDraft] = useState({
+    title: doc.title,
+    typeId: doc.typeId,
+    categoryId: doc.categoryId,
+    period: doc.period ?? "",
+    issuedOn: doc.issuedOn ?? "",
+    expiresOn: doc.expiresOn ?? "",
+    storageKind: doc.storageKind,
+    locationLabel: doc.locationLabel,
+    locationProvider: doc.locationProvider,
+    notes: doc.notes ?? "",
+    isCurrent: doc.isCurrent,
+  });
+  const [expiryMode, setExpiryMode] = useState<"na" | "date">(doc.expiresOn ? "date" : "na");
+  const [newCategory, setNewCategory] = useState("");
+  const [creatingCategory, setCreatingCategory] = useState(false);
+  const [newType, setNewType] = useState("");
+  const [creatingType, setCreatingType] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    if (!draft.title.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onSave(
+        doc,
+        {
+          ...doc,
+          title: draft.title.trim(),
+          typeId: draft.typeId,
+          categoryId: draft.categoryId,
+          period: draft.period,
+          issuedOn: draft.issuedOn,
+          expiresOn: expiryMode === "na" ? "" : draft.expiresOn,
+          storageKind: doc.storageKind === "stored" ? draft.storageKind : "referenced",
+          locationLabel: draft.locationLabel,
+          locationProvider: providerFromLabel(draft.locationLabel),
+          notes: draft.notes,
+        },
+        draft.isCurrent,
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not update that listing.");
+      setBusy(false);
+    }
+  };
+
+  return createPortal(
+    <div className="modal-back" onClick={onClose}>
+      <div className="modal" onClick={(event) => event.stopPropagation()}>
+        <h2>Edit listing</h2>
+        <p className="meta">Change how this file is filed. The scan or PDF stays as it is.</p>
+        {error && (
+          <div className="modal-status warn" role="status">
+            {error}
+          </div>
+        )}
+        <label className="field">
+          <span>Title</span>
+          <input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} />
+        </label>
+        <label className="field">
+          <span>Category</span>
+          <select
+            value={creatingCategory ? "__new__" : draft.categoryId}
+            onChange={(event) => {
+              if (event.target.value === "__new__") {
+                setCreatingCategory(true);
+                setCreatingType(false);
+                return;
+              }
+              setCreatingCategory(false);
+              setCreatingType(false);
+              const categoryId = event.target.value;
+              const types = allTypes().filter((type) => type.categoryId === categoryId);
+              const keep = types.some((type) => type.id === draft.typeId);
+              const nextType = keep ? typeById(draft.typeId) : types[0] ?? typeById("other");
+              setDraft({
+                ...draft,
+                categoryId,
+                typeId: nextType.id,
+              });
+            }}
+          >
+            {allCategories().map((category) => (
+              <option key={category.id} value={category.id}>
+                {category.label}
+              </option>
+            ))}
+            <option value="__new__">Create a new category…</option>
+          </select>
+        </label>
+        {creatingCategory && (
+          <div className="row">
+            <label className="field" style={{ flex: 1 }}>
+              <span>New category name</span>
+              <input
+                value={newCategory}
+                onChange={(event) => setNewCategory(event.target.value)}
+                placeholder="School, Pets, Work…"
+              />
+            </label>
+            <button
+              className="primary"
+              type="button"
+              disabled={!newCategory.trim()}
+              onClick={() => {
+                void (async () => {
+                  try {
+                    const created = await onCreateCategory(newCategory);
+                    setCreatingCategory(false);
+                    setNewCategory("");
+                    setDraft({
+                      ...draft,
+                      categoryId: created.categoryId,
+                      typeId: created.typeId as DocumentTypeId,
+                    });
+                  } catch (err) {
+                    setError(err instanceof Error ? err.message : "Could not create that category.");
+                  }
+                })();
+              }}
+            >
+              Create
+            </button>
+          </div>
+        )}
+        <label className="field">
+          <span>Document type</span>
+          <select
+            value={creatingType ? "__new__" : draft.typeId}
+            onChange={(event) => {
+              if (event.target.value === "__new__") {
+                setCreatingType(true);
+                return;
+              }
+              setCreatingType(false);
+              const type = typeById(event.target.value);
+              setDraft({
+                ...draft,
+                typeId: type.id,
+                categoryId: type.categoryId,
+              });
+            }}
+          >
+            {allTypes()
+              .filter((type) => type.categoryId === draft.categoryId)
+              .map((type) => (
+                <option key={type.id} value={type.id}>
+                  {type.label}
+                </option>
+              ))}
+            <option value="__new__">Create a new document type…</option>
+          </select>
+        </label>
+        {creatingType && (
+          <div className="row">
+            <label className="field" style={{ flex: 1 }}>
+              <span>New document type</span>
+              <input
+                value={newType}
+                onChange={(event) => setNewType(event.target.value)}
+                placeholder="School letter, NHS letter…"
+              />
+            </label>
+            <button
+              className="primary"
+              type="button"
+              disabled={!newType.trim() || creatingCategory}
+              onClick={() => {
+                void (async () => {
+                  try {
+                    const created = await onCreateType(newType, draft.categoryId);
+                    setCreatingType(false);
+                    setNewType("");
+                    setDraft({
+                      ...draft,
+                      typeId: created.typeId as DocumentTypeId,
+                      categoryId: created.categoryId,
+                    });
+                  } catch (err) {
+                    setError(err instanceof Error ? err.message : "Could not create that document type.");
+                  }
+                })();
+              }}
+            >
+              Create
+            </button>
+          </div>
+        )}
+        <label className="field">
+          <span>Period</span>
+          <input
+            placeholder="2026–27"
+            value={draft.period}
+            onChange={(event) => setDraft({ ...draft, period: event.target.value })}
+          />
+        </label>
+        <div className="row">
+          <label className="field" style={{ flex: 1 }}>
+            <span>Issued</span>
+            <input
+              type="date"
+              value={draft.issuedOn}
+              onChange={(event) => setDraft({ ...draft, issuedOn: event.target.value })}
+            />
+          </label>
+          <label className="field" style={{ flex: 1 }}>
+            <span>Expires</span>
+            <div className="switch expiry-switch">
+              <button
+                type="button"
+                className={expiryMode === "na" ? "active" : ""}
+                onClick={() => {
+                  setExpiryMode("na");
+                  setDraft({ ...draft, expiresOn: "" });
+                }}
+              >
+                N/A
+              </button>
+              <button type="button" className={expiryMode === "date" ? "active" : ""} onClick={() => setExpiryMode("date")}>
+                Date
+              </button>
+            </div>
+            {expiryMode === "date" && (
+              <input
+                type="date"
+                value={draft.expiresOn}
+                onChange={(event) => setDraft({ ...draft, expiresOn: event.target.value })}
+              />
+            )}
+          </label>
+        </div>
+        {doc.storageKind === "stored" && (
+          <label className="field">
+            <span>Storage</span>
+            <select
+              value={draft.storageKind}
+              onChange={(event) => {
+                const storageKind = event.target.value as DocumentRecord["storageKind"];
+                setDraft({
+                  ...draft,
+                  storageKind,
+                  locationLabel:
+                    storageKind === "stored"
+                      ? "Stored locally in ScannedOnArrival"
+                      : draft.locationLabel || "iCloud Drive → Documents",
+                });
+              }}
+            >
+              <option value="stored">Stored here — keep a local copy</option>
+              <option value="referenced">Referenced here — leave the file where it is</option>
+            </select>
+          </label>
+        )}
+        <label className="field">
+          <span>Location</span>
+          <input
+            value={draft.locationLabel}
+            onChange={(event) => setDraft({ ...draft, locationLabel: event.target.value })}
+          />
+        </label>
+        <label className="field">
+          <span>Notes</span>
+          <textarea
+            rows={3}
+            value={draft.notes}
+            onChange={(event) => setDraft({ ...draft, notes: event.target.value })}
+            placeholder="Anything to remember about this copy"
+          />
+        </label>
+        <label className="scan-select">
+          <input
+            type="checkbox"
+            checked={draft.isCurrent}
+            onChange={(event) => setDraft({ ...draft, isCurrent: event.target.checked })}
+          />
+          This is the current version
+        </label>
+        <div className="row">
+          <button className="secondary" type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="primary" type="button" onClick={() => void submit()} disabled={!draft.title.trim() || busy}>
+            Save changes
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }
 
