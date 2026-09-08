@@ -3,8 +3,10 @@ import {
   getAttachment,
   getReceivedEmail,
   inboxApiKey,
+  inferAttachmentContentType,
   isIssuedInboxAddress,
   jsonResponse,
+  pdfHeaderOffset,
 } from "../_lib.js";
 
 export async function GET(request: Request): Promise<Response> {
@@ -28,15 +30,24 @@ export async function GET(request: Request): Promise<Response> {
       return jsonResponse({ error: "That attachment is no longer available." }, 404);
     }
     const fileRes = await fetch(attachment.download_url);
-    if (!fileRes.ok || !fileRes.body) {
+    if (!fileRes.ok) {
       return jsonResponse({ error: "Could not download the PDF." }, 502);
     }
-    const filename = attachment.filename || "document.pdf";
-    return new Response(fileRes.body, {
+    const buffer = await fileRes.arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+    const pdfAt = pdfHeaderOffset(bytes);
+    const body = pdfAt > 0 ? bytes.subarray(pdfAt) : bytes;
+    const filename = attachment.filename || (pdfAt >= 0 ? "document.pdf" : "document");
+    const contentType = inferAttachmentContentType(body, filename, attachment.content_type);
+    const safeName = (contentType === "application/pdf" && !filename.toLowerCase().endsWith(".pdf")
+      ? `${filename.replace(/\.[^.]+$/, "") || "document"}.pdf`
+      : filename
+    ).replace(/"/g, "");
+    return new Response(new Uint8Array(body), {
       status: 200,
       headers: {
-        "Content-Type": attachment.content_type || fileRes.headers.get("Content-Type") || "application/octet-stream",
-        "Content-Disposition": `attachment; filename="${filename.replace(/"/g, "")}"`,
+        "Content-Type": contentType,
+        "Content-Disposition": `attachment; filename="${safeName}"`,
         "Cache-Control": "no-store",
       },
     });

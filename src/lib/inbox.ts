@@ -1,4 +1,5 @@
 import { classifyDocument } from "../data/classify";
+import { normalizeDocumentFile } from "./pdf";
 import type { InboxItem } from "../types";
 
 export const INBOX_DOMAIN = "inbox.scannedonarrival.com";
@@ -89,7 +90,7 @@ export async function downloadInboxFile(item: InboxItem, address: string): Promi
   const blob = await response.blob();
   const name = item.attachmentName || "document.pdf";
   const type = item.contentType || blob.type || "application/pdf";
-  return new File([blob], name, { type });
+  return normalizeDocumentFile(new File([blob], name, { type }));
 }
 
 export async function confirmInboxFile(item: InboxItem, address: string): Promise<boolean> {

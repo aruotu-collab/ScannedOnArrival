@@ -30,7 +30,15 @@ import {
   withoutSampleInbox,
 } from "./lib/inbox";
 import { computeStatus, locationLine } from "./data/status";
-import { extractPdfText, isImage, isPdf, isPdfBlob, renderPdfPages } from "./lib/pdf";
+import {
+  blobLooksLikePdf,
+  extractPdfText,
+  isImage,
+  isPdf,
+  isPdfBlob,
+  rasterizePdfForStorage,
+  renderPdfPages,
+} from "./lib/pdf";
 import { extractImageText } from "./lib/ocr";
 import { consumeSharedFile, isDesktopLayout, isIos, isStandalone } from "./lib/pwa";
 import { buildBackup, downloadBackup, parseBackupFile, restoreBackup } from "./lib/backup";
@@ -284,6 +292,10 @@ export default function App() {
   const [addStart, setAddStart] = useState<"choose" | "camera">("choose");
   const [intendedTypeId, setIntendedTypeId] = useState<string | null>(null);
   const [incomingFile, setIncomingFile] = useState<File | null>(null);
+  const [incomingMethod, setIncomingMethod] = useState<SourceKind | null>(null);
+  const [pendingInboxItem, setPendingInboxItem] = useState<InboxItem | null>(null);
+  const [inboxBusyId, setInboxBusyId] = useState<string | null>(null);
+  const [inboxBusyKind, setInboxBusyKind] = useState<"confirm" | "remove" | null>(null);
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [demoLanding, setDemoLanding] = useState(false);
@@ -398,6 +410,8 @@ export default function App() {
 
   const openAdd = (start: "choose" | "camera", typeId?: string | null) => {
     setIncomingFile(null);
+    setIncomingMethod(null);
+    setPendingInboxItem(null);
     setIntendedTypeId(typeId ?? null);
     setAddStart(start);
     setAddOpen(true);
@@ -591,49 +605,70 @@ export default function App() {
     await persistDocs(saved);
     setAddOpen(false);
     setIncomingFile(null);
+    setIncomingMethod(null);
     setAddStart("choose");
     setSelectedId(id);
     setExpandedTypeId(record.typeId);
     setView("documents");
-    setToast(`${record.title} added`);
+    let toastMessage = `${record.title} added`;
+    const pending = pendingInboxItem;
+    setPendingInboxItem(null);
+    if (pending) {
+      if (pending.emailId) {
+        const dropped = await confirmInboxFile(pending, settings.inboxAddress);
+        if (!dropped) toastMessage = "Saved locally. The server copy may still be waiting to drop.";
+      }
+      await persistInbox(inbox.map((row) => (row.id === pending.id ? { ...row, status: "added" } : row)));
+    }
+    setToast(toastMessage);
   };
 
   const addFromInbox = async (item: InboxItem) => {
-    const type = typeById(item.typeId);
-    let file: File | null = null;
-    if (item.emailId && item.attachmentId) {
-      file = await downloadInboxFile(item, settings.inboxAddress);
+    if (inboxBusyId) return;
+    setInboxBusyId(item.id);
+    setInboxBusyKind("confirm");
+    try {
+      let file: File | null = null;
+      if (item.emailId && item.attachmentId) {
+        file = await downloadInboxFile(item, settings.inboxAddress);
+        if (!file) {
+          setToast("Could not download that PDF yet");
+          return;
+        }
+      }
       if (!file) {
-        setToast("Could not download that PDF yet");
+        setToast("That attachment is no longer available");
         return;
       }
+      setPendingInboxItem(item);
+      setIncomingFile(file);
+      setIncomingMethod("email-forward");
+      setIntendedTypeId(null);
+      setAddStart("choose");
+      setAddOpen(true);
+    } finally {
+      setInboxBusyId(null);
+      setInboxBusyKind(null);
     }
-    const draft: AddDraft = {
-      method: "email-forward",
-      title: item.period ? `${type.label} ${item.period}` : type.label,
-      typeId: item.typeId,
-      categoryId: type.categoryId,
-      period: item.period ?? "",
-      issuedOn: "",
-      expiresOn: "",
-      storageKind: file ? "stored" : settings.privacyMode === "inbox" ? "stored" : "referenced",
-      locationLabel: file
-        ? "Stored locally after inbox processing"
-        : settings.privacyMode === "inbox"
-          ? "Stored locally after inbox processing"
-          : "Email attachment — add locally to keep a private copy",
-      locationProvider: "email",
-      fileName: file?.name ?? item.attachmentName,
-      mimeType: file?.type,
-      file: file ?? undefined,
-      files: file ? [file] : undefined,
-    };
-    await addDocument(draft, true);
-    if (item.emailId) {
-      const dropped = await confirmInboxFile(item, settings.inboxAddress);
-      if (!dropped) setToast("Saved locally. The server copy may still be waiting to drop.");
+  };
+
+  const removeFromInbox = async (item: InboxItem) => {
+    if (inboxBusyId) return;
+    setInboxBusyId(item.id);
+    setInboxBusyKind("remove");
+    try {
+      if (item.emailId) {
+        const dropped = await confirmInboxFile(item, settings.inboxAddress);
+        await persistInbox(inbox.map((row) => (row.id === item.id ? { ...row, status: "dismissed" } : row)));
+        setToast(dropped ? "Removed without saving" : "Removed here. The server copy may still be waiting to drop.");
+        return;
+      }
+      await persistInbox(inbox.map((row) => (row.id === item.id ? { ...row, status: "dismissed" } : row)));
+      setToast("Removed without saving");
+    } finally {
+      setInboxBusyId(null);
+      setInboxBusyKind(null);
     }
-    await persistInbox(inbox.map((row) => (row.id === item.id ? { ...row, status: "added" } : row)));
   };
 
   if (!hydrated) {
@@ -831,7 +866,12 @@ export default function App() {
               documents={documents}
               onSettings={persistSettings}
               onConfirm={addFromInbox}
+              onRemove={removeFromInbox}
+              confirmingId={inboxBusyId}
+              busyKind={inboxBusyKind}
               onAddMail={(file) => {
+                setPendingInboxItem(null);
+                setIncomingMethod(null);
                 setIncomingFile(file);
                 setAddStart("choose");
                 setAddOpen(true);
@@ -929,10 +969,13 @@ export default function App() {
           startAt={addStart}
           intendedTypeId={intendedTypeId}
           incomingFile={incomingFile}
+          incomingMethod={incomingMethod}
           openaiApiKey={settings.openaiApiKey}
           onClose={() => {
             setAddOpen(false);
             setIncomingFile(null);
+            setIncomingMethod(null);
+            setPendingInboxItem(null);
             setIntendedTypeId(null);
             setAddStart("choose");
           }}
@@ -2357,7 +2400,8 @@ function DocumentDetail({
         if (blobs.length >= expected) {
           const viewPages: Array<{ blob: Blob; image: boolean }> = [];
           for (const blob of blobs) {
-            if (isPdfBlob(blob, doc.mimeType, doc.fileName)) {
+            const treatAsPdf = isPdfBlob(blob, doc.mimeType, doc.fileName) || (await blobLooksLikePdf(blob));
+            if (treatAsPdf) {
               try {
                 const rendered = await renderPdfPages(blob);
                 for (const page of rendered) viewPages.push({ blob: page, image: true });
@@ -2367,7 +2411,10 @@ function DocumentDetail({
               continue;
             }
             if (isVisualImage(blob.type || doc.mimeType, doc.fileName)) {
-              viewPages.push({ blob: await bleachScanBlob(blob), image: true });
+              viewPages.push({
+                blob: doc.source === "camera" ? await bleachScanBlob(blob) : blob,
+                image: true,
+              });
               continue;
             }
             viewPages.push({ blob, image: false });
@@ -2670,6 +2717,9 @@ function InboxView({
   documents,
   onSettings,
   onConfirm,
+  onRemove,
+  confirmingId,
+  busyKind,
   onAddFound,
   onAddMail,
   onToast,
@@ -2681,6 +2731,9 @@ function InboxView({
   documents: DocumentRecord[];
   onSettings: (s: AppSettings) => Promise<void>;
   onConfirm: (item: InboxItem) => Promise<void>;
+  onRemove: (item: InboxItem) => Promise<void>;
+  confirmingId: string | null;
+  busyKind: "confirm" | "remove" | null;
   onAddFound: (item: FoundEmailDoc) => Promise<void>;
   onAddMail: (file: File) => void;
   onToast: (msg: string) => void;
@@ -2716,8 +2769,8 @@ function InboxView({
         <div className="card">
           {inboxReady ? (
             <div className="notice">
-              Forwarding is opt-in. A PDF sent here is held only until you confirm. After confirm, this device
-              keeps the copy and we ask the receive server to drop its copy.
+              Forwarding is opt-in. A PDF sent here is held only until you confirm or remove it. After confirm, this
+              device keeps the copy and we ask the receive server to drop its copy. Remove drops it without saving.
             </div>
           ) : (
             <div className="notice warn">
@@ -2759,13 +2812,28 @@ function InboxView({
                       {item.period ?? item.attachmentName}
                       <br />
                       {existing
-                        ? `Replaces your older ${existing.period ?? existing.title} copy`
+                        ? `You already have a current ${typeById(item.typeId).label} on this device`
                         : "No previous copy indexed"}
                     </p>
                   </div>
-                  <button className="primary" onClick={() => onConfirm(item)}>
-                    Confirm
-                  </button>
+                  <div className="row inbox-item-actions">
+                    <button
+                      type="button"
+                      className="danger"
+                      disabled={confirmingId !== null}
+                      onClick={() => void onRemove(item)}
+                    >
+                      {confirmingId === item.id && busyKind === "remove" ? "Removing…" : "Remove"}
+                    </button>
+                    <button
+                      type="button"
+                      className="primary"
+                      disabled={confirmingId !== null}
+                      onClick={() => void onConfirm(item)}
+                    >
+                      {confirmingId === item.id && busyKind === "confirm" ? "Opening…" : "Confirm"}
+                    </button>
+                  </div>
                 </div>
               );
             })}
@@ -2982,6 +3050,7 @@ function AddDocumentModal({
   startAt,
   intendedTypeId,
   incomingFile,
+  incomingMethod,
   openaiApiKey,
   onClose,
   onSave,
@@ -2992,6 +3061,7 @@ function AddDocumentModal({
   startAt: "choose" | "camera";
   intendedTypeId: string | null;
   incomingFile: File | null;
+  incomingMethod: SourceKind | null;
   openaiApiKey: string;
   onClose: () => void;
   onSave: (draft: AddDraft, makeCurrent: boolean) => Promise<void>;
@@ -3076,8 +3146,13 @@ function AddDocumentModal({
     setError(null);
     try {
       let text = preparedText ?? "";
-      if (!preparedText && isPdf(file)) {
-        text = await extractPdfText(file);
+      const pdfFile = isPdf(file) || (await blobLooksLikePdf(file));
+      if (!preparedText && pdfFile) {
+        try {
+          text = await extractPdfText(file);
+        } catch {
+          text = "";
+        }
       } else if (!preparedText && isImage(file)) {
         try {
           text = await extractImageText(file);
@@ -3092,7 +3167,15 @@ function AddDocumentModal({
         text,
         apiKey: openaiApiKey || undefined,
       });
-      const pagesToStore = pageFiles?.length ? pageFiles : [file];
+      let pagesToStore = pageFiles?.length ? pageFiles : [file];
+      if (!pageFiles?.length && pdfFile) {
+        setBusyLabel("Making page pictures…");
+        try {
+          pagesToStore = await rasterizePdfForStorage(file);
+        } catch {
+          pagesToStore = [file];
+        }
+      }
       const next = applyClassification({
         method,
         file: pagesToStore[0],
@@ -3107,15 +3190,20 @@ function AddDocumentModal({
         expiresOn: classified.expiresOn ?? "",
         storageKind,
         locationLabel:
-          storageKind === "stored"
-            ? "Stored locally in ScannedOnArrival"
-            : `${file.name} from Files`,
-        locationProvider: storageKind === "stored" ? "local" : providerFromLabel(file.name) === "local" ? "files" : "files",
-        fileName: pagesToStore[0].name,
+          method === "email-forward"
+            ? "Stored locally after inbox processing"
+            : storageKind === "stored"
+              ? "Stored locally in ScannedOnArrival"
+              : `${file.name} from Files`,
+        locationProvider:
+          method === "email-forward" ? "email" : storageKind === "stored" ? "local" : "files",
+        fileName: pdfFile ? file.name : pagesToStore[0].name,
         mimeType: pagesToStore[0].type,
       });
       setDraft(next);
-      const canAuto = method !== "camera" && classified.typeId !== "other" && classified.confidence !== "low" && !intendedType;
+      const reviewFirst = method === "email-forward";
+      const canAuto =
+        !reviewFirst && method !== "camera" && classified.typeId !== "other" && classified.confidence !== "low" && !intendedType;
       if (canAuto) {
         const match = documents.find((d) => d.typeId === next.typeId && d.isCurrent && d.typeId !== "other");
         if (match) {
@@ -3137,9 +3225,10 @@ function AddDocumentModal({
   useEffect(() => {
     if (!incomingFile || ingested.current) return;
     ingested.current = true;
-    const method: SourceKind = isImage(incomingFile) ? "camera" : "upload";
+    const method: SourceKind =
+      incomingMethod ?? (isImage(incomingFile) ? "camera" : "upload");
     void handleFile(incomingFile, method, "stored");
-  }, [incomingFile]);
+  }, [incomingFile, incomingMethod]);
 
   const addCapturedPage = async (raw: File) => {
     setBusy(true);
@@ -3226,6 +3315,10 @@ function AddDocumentModal({
 
   const continueFromForm = () => {
     if (!draft) return;
+    if (draft.method === "email-forward") {
+      void submit(true);
+      return;
+    }
     const match = documents.find((d) => d.typeId === draft.typeId && d.isCurrent && d.typeId !== "other");
     if (match) {
       setExisting(match);
@@ -3444,6 +3537,23 @@ function AddDocumentModal({
         {step === "form" && draft && (
           <>
             <h2>Confirm what this is</h2>
+            {draft.method === "email-forward" && (
+              <p className="meta">
+                Choose the category and document type, then whether this should be the current version or an extra
+                copy.
+              </p>
+            )}
+            {draft.previewUrl && (
+              <div className="preview" style={{ marginBottom: 12 }}>
+                <img src={draft.previewUrl} alt={draft.title || "Document page"} />
+              </div>
+            )}
+            {draft.method === "email-forward" && documents.find((d) => d.typeId === draft.typeId && d.isCurrent && d.typeId !== "other") && (
+              <div className="notice">
+                Setting this as current moves your older {typeById(draft.typeId).label} copy into Previous versions. Keep
+                as extra copy leaves that current version in place.
+              </div>
+            )}
             {draft.classified && (
               <div className="notice ok">
                 We think this belongs in {suggestedPath(draft.typeId, draft.period || undefined)}. Classification is
@@ -3649,9 +3759,20 @@ function AddDocumentModal({
               <button className="secondary" onClick={onClose}>
                 Cancel
               </button>
-              <button className="primary" onClick={continueFromForm} disabled={!draft.title}>
-                Save here
-              </button>
+              {draft.method === "email-forward" ? (
+                <>
+                  <button className="secondary" onClick={() => void submit(false)} disabled={!draft.title}>
+                    Keep as extra copy
+                  </button>
+                  <button className="primary" onClick={continueFromForm} disabled={!draft.title}>
+                    Set as current version
+                  </button>
+                </>
+              ) : (
+                <button className="primary" onClick={continueFromForm} disabled={!draft.title}>
+                  Save here
+                </button>
+              )}
             </div>
           </>
         )}

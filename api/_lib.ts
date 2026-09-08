@@ -49,7 +49,46 @@ export function isDocumentAttachment(attachment: ReceivedAttachment): boolean {
   const name = (attachment.filename ?? "").toLowerCase();
   const inlineImage = attachment.content_disposition === "inline" && type.startsWith("image/");
   if (inlineImage) return false;
-  return type === "application/pdf" || type.startsWith("image/") || name.endsWith(".pdf") || /\.(jpe?g|png|webp)$/.test(name);
+  if (/\.(dat|ics|eml|vcf|zip|exe|html?)$/i.test(name)) return false;
+  if (type.includes("pdf") || type.startsWith("image/") || name.endsWith(".pdf") || /\.(jpe?g|png|webp)$/.test(name)) {
+    return true;
+  }
+  return (type === "application/octet-stream" || type === "application/x-download") && (!name || !/\.[a-z0-9]{1,8}$/i.test(name));
+}
+
+export function pdfHeaderOffset(bytes: Uint8Array): number {
+  const limit = Math.min(bytes.length, 1024) - 3;
+  for (let index = 0; index < limit; index += 1) {
+    if (bytes[index] === 0x25 && bytes[index + 1] === 0x50 && bytes[index + 2] === 0x44 && bytes[index + 3] === 0x46) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+export function sniffImageType(bytes: Uint8Array): string | null {
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
+    return "image/png";
+  }
+  if (bytes.length >= 12 && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) {
+    return "image/webp";
+  }
+  return null;
+}
+
+export function inferAttachmentContentType(
+  bytes: Uint8Array,
+  filename: string,
+  declaredType?: string | null,
+): string {
+  if (pdfHeaderOffset(bytes) >= 0) return "application/pdf";
+  const imageType = sniffImageType(bytes);
+  if (imageType) return imageType;
+  const type = (declaredType || "").toLowerCase();
+  if (type.includes("pdf") || filename.toLowerCase().endsWith(".pdf")) return "application/pdf";
+  if (type.startsWith("image/")) return type;
+  return type || "application/octet-stream";
 }
 
 async function resendJson<T>(path: string, init?: RequestInit): Promise<{ ok: boolean; status: number; body: T }> {

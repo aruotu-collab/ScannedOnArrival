@@ -2042,6 +2042,10 @@ button {
   align-items: center;
 }
 
+.inbox-item-actions {
+  flex-shrink: 0;
+}
+
 .inbox-address {
   display: flex;
   flex-direction: column;
