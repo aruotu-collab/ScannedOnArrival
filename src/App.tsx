@@ -1897,6 +1897,109 @@ function FileViewer({
   );
 }
 
+function PageRail({
+  pages,
+  title,
+  demo,
+  onOpen,
+}: {
+  pages: Array<{ url: string; image: boolean }>;
+  title: string;
+  demo?: boolean;
+  onOpen: (index: number) => void;
+}) {
+  const [index, setIndex] = useState(0);
+  const swipeStart = useRef<{ x: number; y: number; page: number } | null>(null);
+  const swiped = useRef(false);
+  const [dragX, setDragX] = useState(0);
+  const [dragging, setDragging] = useState(false);
+
+  const goTo = (next: number) => {
+    setIndex(Math.max(0, Math.min(pages.length - 1, next)));
+  };
+
+  const endDrag = (event: PointerEvent<HTMLDivElement>) => {
+    event.stopPropagation();
+    const start = swipeStart.current;
+    swipeStart.current = null;
+    setDragging(false);
+    setDragX(0);
+    if (!start || pages.length < 2) return;
+    const dx = event.clientX - start.x;
+    const dy = event.clientY - start.y;
+    const width = event.currentTarget.clientWidth || 1;
+    if (Math.abs(dx) < Math.max(28, width * 0.12) || Math.abs(dx) <= Math.abs(dy)) return;
+    swiped.current = true;
+    goTo(start.page + (dx < 0 ? 1 : -1));
+  };
+
+  return (
+    <div
+      className={`page-rail ${pages.length > 1 ? "swipeable" : ""}`}
+      aria-label="Document pages"
+      onPointerDown={(event) => {
+        event.stopPropagation();
+        if (pages.length < 2) return;
+        event.currentTarget.setPointerCapture(event.pointerId);
+        swipeStart.current = { x: event.clientX, y: event.clientY, page: index };
+        swiped.current = false;
+        setDragging(true);
+        setDragX(0);
+      }}
+      onPointerMove={(event) => {
+        event.stopPropagation();
+        const start = swipeStart.current;
+        if (!start) return;
+        const dx = event.clientX - start.x;
+        const dy = event.clientY - start.y;
+        if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return;
+        if (Math.abs(dx) <= Math.abs(dy)) return;
+        const atStart = start.page === 0 && dx > 0;
+        const atEnd = start.page === pages.length - 1 && dx < 0;
+        setDragX(atStart || atEnd ? dx * 0.28 : dx);
+      }}
+      onPointerUp={endDrag}
+      onPointerCancel={endDrag}
+      onTouchStart={(event) => event.stopPropagation()}
+      onTouchMove={(event) => event.stopPropagation()}
+    >
+      <div
+        className={`page-rail-track${dragging ? " dragging" : ""}`}
+        style={{ transform: `translateX(calc(-${index * 100}% + ${dragX}px))` }}
+      >
+        {pages.map((page, pageIndex) => (
+          <figure key={`${title}-page-${pageIndex}`} className="page-slide">
+            <div
+              role="button"
+              tabIndex={0}
+              className="preview-open"
+              onClick={() => {
+                if (swiped.current) return;
+                onOpen(pageIndex);
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter" && event.key !== " ") return;
+                event.preventDefault();
+                onOpen(pageIndex);
+              }}
+            >
+              <img src={page.url} alt={`${title} page ${pageIndex + 1}`} draggable={false} />
+              {demo && (
+                <span className="demo-ribbon demo-ribbon-corner" aria-hidden="true">
+                  Demo
+                </span>
+              )}
+            </div>
+            <figcaption>
+              Page {pageIndex + 1} of {pages.length}
+            </figcaption>
+          </figure>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function DocumentDetail({
   doc,
   previous,
@@ -1988,21 +2091,13 @@ function DocumentDetail({
                 )}
               </button>
             ) : (
-              <div className="page-rail" aria-label="Document pages">
-                {pages.map((page, index) => (
-                  <figure key={`${doc.id}-page-${index}`} className="page-slide">
-                    <button type="button" className="preview-open" onClick={() => setViewerAt(index)}>
-                      <img src={page.url} alt={`${doc.title} page ${index + 1}`} />
-                      {doc.id === DEMO_DOC_ID && (
-                        <span className="demo-ribbon demo-ribbon-corner" aria-hidden="true">
-                          Demo
-                        </span>
-                      )}
-                    </button>
-                    <figcaption>Page {index + 1} of {pages.length}</figcaption>
-                  </figure>
-                ))}
-              </div>
+              <PageRail
+                key={doc.id}
+                pages={pages}
+                title={doc.title}
+                demo={doc.id === DEMO_DOC_ID}
+                onOpen={setViewerAt}
+              />
             )}
           </div>
           <button type="button" className="secondary preview-full-btn" onClick={() => setViewerAt(0)}>

@@ -973,21 +973,42 @@ button {
 
 .preview.preview-pages {
   display: block;
+  min-width: 0;
   padding: 0;
 }
 
 .page-rail {
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  touch-action: none;
+  overscroll-behavior-x: contain;
+  user-select: none;
+}
+
+.page-rail.swipeable {
+  cursor: grab;
+}
+
+.page-rail.swipeable:active {
+  cursor: grabbing;
+}
+
+.page-rail-track {
   display: flex;
-  overflow-x: auto;
-  scroll-snap-type: x mandatory;
-  -webkit-overflow-scrolling: touch;
+  width: 100%;
+  transition: transform 0.28s ease;
+  will-change: transform;
+}
+
+.page-rail-track.dragging {
+  transition: none;
 }
 
 .page-slide {
   min-width: 100%;
   flex: 0 0 100%;
   margin: 0;
-  scroll-snap-align: start;
   background: var(--cream);
 }
 
@@ -997,6 +1018,7 @@ button {
   object-fit: contain;
   display: block;
   background: var(--cream);
+  pointer-events: none;
 }
 
 .page-slide figcaption {
@@ -1355,6 +1377,8 @@ button {
   padding: 0 16px 16px;
   -webkit-overflow-scrolling: touch;
   width: 100%;
+  min-width: 0;
+  overscroll-behavior-x: contain;
 }
 
 .doc-slide {
