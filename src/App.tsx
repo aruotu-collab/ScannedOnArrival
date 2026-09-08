@@ -1834,11 +1834,17 @@ function documentsScroller() {
   return document.scrollingElement ?? document.documentElement;
 }
 
+function nameplateOffset() {
+  const plate = document.querySelector(".app-nameplate");
+  const bottom = plate instanceof HTMLElement ? plate.getBoundingClientRect().bottom : 0;
+  return Math.max(12, Math.round(bottom) + 14);
+}
+
 function scrollCategoryToTop(categoryId: string, behavior: ScrollBehavior) {
   const card = document.getElementById(`category-${categoryId}`);
   if (!card) return;
   const scroller = documentsScroller();
-  const top = Math.max(0, scroller.scrollTop + card.getBoundingClientRect().top - 12);
+  const top = Math.max(0, scroller.scrollTop + card.getBoundingClientRect().top - nameplateOffset());
   if (behavior === "auto" || prefersReducedMotion()) {
     scroller.scrollTop = top;
     return;

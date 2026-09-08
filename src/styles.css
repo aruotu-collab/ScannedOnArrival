@@ -1471,7 +1471,7 @@ button {
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   overflow: hidden;
-  scroll-margin-top: 16px;
+  scroll-margin-top: calc(29px + env(safe-area-inset-top, 0px) + 12px);
 }
 
 .doc-category {
@@ -1498,7 +1498,7 @@ button {
   box-shadow: var(--shadow);
   margin: 0 0 14px;
   overflow: hidden;
-  scroll-margin-top: 16px;
+  scroll-margin-top: calc(29px + env(safe-area-inset-top, 0px) + 12px);
 }
 
 .doc-category-card.selected {
@@ -2270,6 +2270,11 @@ button {
   .app-nameplate .scan-cta-glyph {
     width: 24px;
     height: 24px;
+  }
+
+  .doc-category-card,
+  .doc-type-card {
+    scroll-margin-top: calc(52px + env(safe-area-inset-top, 0px) + 12px);
   }
 
   .sidebar {
