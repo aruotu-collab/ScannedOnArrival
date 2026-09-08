@@ -2862,6 +2862,10 @@ function InboxView({
 }) {
   const pending = inbox.filter((i) => i.status === "pending");
   const convenience = settings.privacyMode === "inbox";
+  const [foundMailTab, setFoundMailTab] = useState<"add" | "added">("add");
+  const foundToAdd = foundEmail.filter((item) => !item.added);
+  const foundAdded = foundEmail.filter((item) => item.added);
+  const foundShown = foundMailTab === "add" ? foundToAdd : foundAdded;
 
   return (
     <div className="grid">
@@ -3059,27 +3063,60 @@ function InboxView({
           </div>
         )}
         {foundEmail.length > 0 && (
-          <div className="list" style={{ marginTop: 16 }}>
+          <div className="found-email-list">
             <h3>We found {foundEmail.length} recent documents</h3>
-            {foundEmail.map((item) => (
-              <div key={item.id} className="inbox-item">
-                <div>
-                  <strong>{item.title}</strong>
-                  <p className="meta">
-                    {item.mailbox === "gmail" ? "Gmail" : "Outlook"}
-                    {item.attachmentName ? ` · ${item.attachmentName}` : ""}
-                    {item.period ? ` · ${item.period}` : ""}
-                  </p>
+            <div className="switch found-email-tabs" role="tablist" aria-label="Found email documents">
+              <button
+                type="button"
+                role="tab"
+                className={foundMailTab === "add" ? "active" : ""}
+                aria-selected={foundMailTab === "add"}
+                onClick={() => setFoundMailTab("add")}
+              >
+                Add {foundToAdd.length}
+              </button>
+              <button
+                type="button"
+                role="tab"
+                className={foundMailTab === "added" ? "active" : ""}
+                aria-selected={foundMailTab === "added"}
+                onClick={() => setFoundMailTab("added")}
+              >
+                Added {foundAdded.length}
+              </button>
+            </div>
+            <div className="list" style={{ marginTop: 12 }}>
+              {foundShown.length === 0 && (
+                <p className="meta">
+                  {foundMailTab === "add"
+                    ? "Nothing left to add from this look."
+                    : "Nothing added yet. Open Add, then choose a file."}
+                </p>
+              )}
+              {foundShown.map((item) => (
+                <div key={item.id} className="found-email-item">
+                  <div className="found-email-copy">
+                    <strong>{item.title}</strong>
+                    <p className="meta">
+                      {item.mailbox === "gmail" ? "Gmail" : "Outlook"}
+                      {item.attachmentName ? ` · ${item.attachmentName}` : ""}
+                      {item.period ? ` · ${item.period}` : ""}
+                    </p>
+                  </div>
+                  {foundMailTab === "add" ? (
+                    <button
+                      className="primary"
+                      disabled={confirmingId !== null}
+                      onClick={() => void onAddFound(item)}
+                    >
+                      {confirmingId === item.id && busyKind === "mailbox" ? "Opening…" : "Add"}
+                    </button>
+                  ) : (
+                    <span className="found-email-done">Added</span>
+                  )}
                 </div>
-                <button
-                  className="primary"
-                  disabled={item.added || confirmingId !== null}
-                  onClick={() => void onAddFound(item)}
-                >
-                  {item.added ? "Added" : confirmingId === item.id && busyKind === "mailbox" ? "Opening…" : "Add"}
-                </button>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
         )}
       </div>

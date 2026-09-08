@@ -2056,6 +2056,51 @@ button {
   flex-shrink: 0;
 }
 
+.found-email-list {
+  margin-top: 16px;
+}
+
+.found-email-tabs {
+  width: 100%;
+  margin-top: 12px;
+}
+
+.found-email-tabs button {
+  flex: 1;
+}
+
+.found-email-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 12px;
+  align-items: start;
+}
+
+.found-email-copy {
+  min-width: 0;
+}
+
+.found-email-copy strong,
+.found-email-copy .meta {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.found-email-item .primary {
+  white-space: nowrap;
+}
+
+.found-email-done {
+  display: inline-flex;
+  align-items: center;
+  min-height: 40px;
+  padding: 0 2px;
+  color: var(--muted, #6f675c);
+  font-size: 0.85rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 .inbox-address {
   display: flex;
   flex-direction: column;
