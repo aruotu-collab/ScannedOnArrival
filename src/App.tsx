@@ -3005,59 +3005,59 @@ function InboxView({
       )}
 
       <div className="card">
-        <h3>Optional Gmail or Outlook</h3>
+        <h3>{outlookReady ? "Optional Gmail or Outlook" : "Optional Gmail"}</h3>
         <p className="meta">
-          Never required. This stays on this device: you sign in with Google or Microsoft in this browser, we look
-          for recent PDF attachments here, then you choose what to add. ScannedOnArrival does not receive your
-          mailbox. Forwarding still works without this.
+          Never required. This stays on this device: you sign in with Google
+          {outlookReady ? " or Microsoft" : ""} in this browser, we look for recent PDF attachments here, then you
+          choose what to add. ScannedOnArrival does not receive your mailbox. Forwarding still works without this.
         </p>
-        {(!gmailReady || !outlookReady) && (
+        {!gmailReady && !outlookReady && (
           <p className="meta" style={{ marginTop: 10 }}>
-            {!gmailReady && !outlookReady
-              ? "Mailbox connect is not configured on this site yet. Use forward-to-inbox until it is."
-              : !gmailReady
-                ? "Gmail connect is not configured on this site yet."
-                : "Outlook connect is not configured on this site yet."}
+            Mailbox connect is not configured on this site yet. Use forward-to-inbox until it is.
           </p>
         )}
-        <div className="row" style={{ marginTop: 12 }}>
-          <button
-            className="secondary"
-            type="button"
-            disabled={!gmailReady || confirmingId !== null}
-            onClick={onConnectGmail}
-          >
-            {confirmingId === "gmail" && busyKind === "mailbox"
-              ? "Looking…"
-              : gmailConnected
-                ? "Look in Gmail again"
-                : "Connect Gmail"}
-          </button>
-          {gmailConnected && (
-            <button className="danger" type="button" disabled={confirmingId !== null} onClick={onDisconnectGmail}>
-              Disconnect Gmail
+        {gmailReady && (
+          <div className="row" style={{ marginTop: 12 }}>
+            <button
+              className="secondary"
+              type="button"
+              disabled={confirmingId !== null}
+              onClick={onConnectGmail}
+            >
+              {confirmingId === "gmail" && busyKind === "mailbox"
+                ? "Looking…"
+                : gmailConnected
+                  ? "Look in Gmail again"
+                  : "Connect Gmail"}
             </button>
-          )}
-        </div>
-        <div className="row" style={{ marginTop: 10 }}>
-          <button
-            className="secondary"
-            type="button"
-            disabled={!outlookReady || confirmingId !== null}
-            onClick={onConnectOutlook}
-          >
-            {confirmingId === "outlook" && busyKind === "mailbox"
-              ? "Looking…"
-              : outlookConnected
-                ? "Look in Outlook again"
-                : "Connect Outlook"}
-          </button>
-          {outlookConnected && (
-            <button className="danger" type="button" disabled={confirmingId !== null} onClick={onDisconnectOutlook}>
-              Disconnect Outlook
+            {gmailConnected && (
+              <button className="danger" type="button" disabled={confirmingId !== null} onClick={onDisconnectGmail}>
+                Disconnect Gmail
+              </button>
+            )}
+          </div>
+        )}
+        {outlookReady && (
+          <div className="row" style={{ marginTop: 10 }}>
+            <button
+              className="secondary"
+              type="button"
+              disabled={confirmingId !== null}
+              onClick={onConnectOutlook}
+            >
+              {confirmingId === "outlook" && busyKind === "mailbox"
+                ? "Looking…"
+                : outlookConnected
+                  ? "Look in Outlook again"
+                  : "Connect Outlook"}
             </button>
-          )}
-        </div>
+            {outlookConnected && (
+              <button className="danger" type="button" disabled={confirmingId !== null} onClick={onDisconnectOutlook}>
+                Disconnect Outlook
+              </button>
+            )}
+          </div>
+        )}
         {foundEmail.length > 0 && (
           <div className="list" style={{ marginTop: 16 }}>
             <h3>We found {foundEmail.length} recent documents</h3>
