@@ -1972,7 +1972,7 @@ function documentsScroller() {
 function syncNameplateOffset() {
   const plate = document.querySelector(".app-nameplate");
   const bottom = plate instanceof HTMLElement ? plate.getBoundingClientRect().bottom : 0;
-  const offset = Math.max(12, Math.round(bottom) + 8);
+  const offset = Math.max(16, Math.round(bottom) + 16);
   document.documentElement.style.setProperty("--nameplate-offset", `${offset}px`);
   return offset;
 }
