@@ -2090,6 +2090,17 @@ button {
   white-space: nowrap;
 }
 
+.found-email-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: stretch;
+}
+
+.found-email-actions button {
+  white-space: nowrap;
+}
+
 .found-email-done {
   display: inline-flex;
   align-items: center;

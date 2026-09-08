@@ -176,7 +176,7 @@ export async function listGmailDocuments(): Promise<FoundEmailDoc[]> {
     const filename = attachment.filename || "document.pdf";
     const classified = classifyDocument({ text: `${subject}\n${from}`, fileName: filename });
     found.push({
-      id: `${message.id}:${attachment.body.attachmentId}`,
+      id: `${message.id}:${filename.toLowerCase()}`,
       typeId: classified.typeId,
       title: classified.title,
       period: classified.period,

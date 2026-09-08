@@ -131,7 +131,7 @@ export async function listOutlookDocuments(): Promise<FoundEmailDoc[]> {
       fileName: filename,
     });
     found.push({
-      id: `${message.id}:${attachment.id}`,
+      id: `${message.id}:${filename.toLowerCase()}`,
       typeId: classified.typeId,
       title: classified.title,
       period: classified.period,

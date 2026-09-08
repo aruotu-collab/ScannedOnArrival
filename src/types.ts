@@ -74,6 +74,7 @@ export interface DocumentRecord {
   isCurrent: boolean;
   supersededBy?: string;
   notes?: string;
+  mailboxRef?: string;
 }
 
 export interface FileBlobRecord {
@@ -129,6 +130,7 @@ export interface AppSettings {
   openaiApiKey: string;
   customCategories: CategoryDef[];
   customTypes: CustomTypeDef[];
+  mailboxSkipped: string[];
 }
 
 export interface AppState {

@@ -45,6 +45,7 @@ import {
   outlookConnectAvailable,
   outlookHasSession,
 } from "./lib/outlook";
+import { mailboxRef, rememberFoundEmail } from "./lib/mailbox";
 import { computeStatus, isSuperseded, locationLine } from "./data/status";
 import {
   blobLooksLikePdf,
@@ -93,6 +94,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   openaiApiKey: "",
   customCategories: [],
   customTypes: [],
+  mailboxSkipped: [],
 };
 
 const DEFAULT_CROP: CropInsets = { top: 4, right: 4, bottom: 4, left: 4 };
@@ -339,6 +341,7 @@ export default function App() {
           ...(storedSettings ?? {}),
           customCategories: storedSettings?.customCategories ?? [],
           customTypes: storedSettings?.customTypes ?? [],
+          mailboxSkipped: storedSettings?.mailboxSkipped ?? [],
           inboxAddress: ensureInboxAddress(storedSettings?.inboxAddress),
         };
         setCatalogExtras(next.customCategories, next.customTypes);
@@ -423,6 +426,7 @@ export default function App() {
       ...next,
       customCategories: next.customCategories ?? [],
       customTypes: next.customTypes ?? [],
+      mailboxSkipped: next.mailboxSkipped ?? [],
     };
     setCatalogExtras(safe.customCategories, safe.customTypes);
     setSettings(safe);
@@ -599,6 +603,8 @@ export default function App() {
         : d,
     );
     const pageFiles = draft.files?.length ? draft.files : draft.file ? [draft.file] : [];
+    const found = pendingFoundItem;
+    const pending = pendingInboxItem;
     const record: DocumentRecord = {
       id,
       title: draft.title,
@@ -617,6 +623,7 @@ export default function App() {
       mimeType: draft.mimeType,
       pageCount: pageFiles.length > 0 ? pageFiles.length : undefined,
       isCurrent: makeCurrent || sameType.every((d) => !d.isCurrent),
+      mailboxRef: found ? mailboxRef(found) : undefined,
     };
     const saved = [record, ...nextDocs];
     if (draft.storageKind === "stored") {
@@ -633,8 +640,6 @@ export default function App() {
     setExpandedTypeId(record.typeId);
     setView("documents");
     let toastMessage = `${record.title} added`;
-    const pending = pendingInboxItem;
-    const found = pendingFoundItem;
     setPendingInboxItem(null);
     setPendingFoundItem(null);
     if (pending) {
@@ -703,7 +708,7 @@ export default function App() {
     setInboxBusyId(mailbox);
     setInboxBusyKind("mailbox");
     try {
-      const extra =
+      const extra = rememberFoundEmail(
         mailbox === "gmail"
           ? await (async () => {
               await connectGmail();
@@ -712,21 +717,27 @@ export default function App() {
           : await (async () => {
               await connectOutlook();
               return listOutlookDocuments();
-            })();
-      setFoundEmail((current) => {
-        const kept = current.filter((item) => item.mailbox !== mailbox || item.added);
-        const keptIds = new Set(kept.map((item) => item.id));
-        return [...extra.filter((item) => !keptIds.has(item.id)), ...kept];
-      });
+            })(),
+        documents,
+        settings.mailboxSkipped ?? [],
+      );
+      setFoundEmail((current) => [...extra, ...current.filter((item) => item.mailbox !== mailbox)]);
       await persistSettings({
         ...settings,
         gmailConnected: mailbox === "gmail" ? true : settings.gmailConnected,
         outlookConnected: mailbox === "outlook" ? true : settings.outlookConnected,
       });
+      const fresh = extra.filter((item) => !item.added).length;
+      const remembered = extra.filter((item) => item.added).length;
+      const mailboxLabel = mailbox === "gmail" ? "Gmail" : "Outlook";
       setToast(
-        extra.length
-          ? `Found ${extra.length} recent ${mailbox === "gmail" ? "Gmail" : "Outlook"} document${extra.length === 1 ? "" : "s"}`
-          : `No recent PDF attachments in ${mailbox === "gmail" ? "Gmail" : "Outlook"}`,
+        fresh && remembered
+          ? `Found ${fresh} new ${mailboxLabel} file${fresh === 1 ? "" : "s"} · ${remembered} already in your index`
+          : fresh
+            ? `Found ${fresh} new ${mailboxLabel} file${fresh === 1 ? "" : "s"}`
+            : remembered
+              ? `No new ${mailboxLabel} files. ${remembered} already in your index`
+              : `No recent PDF attachments in ${mailboxLabel}`,
       );
     } catch (error) {
       setToast(error instanceof Error ? error.message : "Could not connect that mailbox.");
@@ -746,6 +757,14 @@ export default function App() {
       outlookConnected: mailbox === "outlook" ? false : settings.outlookConnected,
     });
     setToast(`${mailbox === "gmail" ? "Gmail" : "Outlook"} disconnected on this device`);
+  };
+
+  const skipFoundMailbox = async (item: FoundEmailDoc) => {
+    const ref = mailboxRef(item);
+    const skipped = [...new Set([...(settings.mailboxSkipped ?? []), ref])];
+    setFoundEmail((rows) => rows.filter((row) => mailboxRef(row) !== ref));
+    await persistSettings({ ...settings, mailboxSkipped: skipped });
+    setToast("Hidden from the next look");
   };
 
   const addFromMailbox = async (item: FoundEmailDoc) => {
@@ -986,6 +1005,7 @@ export default function App() {
               onDisconnectGmail={() => void disconnectMailbox("gmail")}
               onDisconnectOutlook={() => void disconnectMailbox("outlook")}
               onAddFound={addFromMailbox}
+              onSkipFound={(item) => void skipFoundMailbox(item)}
               gmailReady={gmailConnectAvailable()}
               outlookReady={outlookConnectAvailable()}
               gmailConnected={gmailHasSession() || settings.gmailConnected}
@@ -1019,6 +1039,7 @@ export default function App() {
                     ...restored.settings,
                     customCategories: restored.settings.customCategories ?? [],
                     customTypes: restored.settings.customTypes ?? [],
+                    mailboxSkipped: restored.settings.mailboxSkipped ?? [],
                     inboxAddress: ensureInboxAddress(restored.settings.inboxAddress),
                   };
                   setCatalogExtras(nextSettings.customCategories, nextSettings.customTypes);
@@ -2827,6 +2848,7 @@ function InboxView({
   confirmingId,
   busyKind,
   onAddFound,
+  onSkipFound,
   onAddMail,
   onConnectGmail,
   onConnectOutlook,
@@ -2849,6 +2871,7 @@ function InboxView({
   confirmingId: string | null;
   busyKind: "confirm" | "remove" | "mailbox" | null;
   onAddFound: (item: FoundEmailDoc) => Promise<void>;
+  onSkipFound: (item: FoundEmailDoc) => void;
   onAddMail: (file: File) => void;
   onConnectGmail: () => void;
   onConnectOutlook: () => void;
@@ -2866,6 +2889,10 @@ function InboxView({
   const foundToAdd = foundEmail.filter((item) => !item.added);
   const foundAdded = foundEmail.filter((item) => item.added);
   const foundShown = foundMailTab === "add" ? foundToAdd : foundAdded;
+
+  useEffect(() => {
+    if (foundToAdd.length > 0) setFoundMailTab("add");
+  }, [foundToAdd.length]);
 
   return (
     <div className="grid">
@@ -3064,7 +3091,10 @@ function InboxView({
         )}
         {foundEmail.length > 0 && (
           <div className="found-email-list">
-            <h3>We found {foundEmail.length} recent documents</h3>
+            <h3>From this look</h3>
+            <p className="meta">
+              Files you Add stay in your index. Look again only brings new ones. Skip hides a file you do not want.
+            </p>
             <div className="switch found-email-tabs" role="tablist" aria-label="Found email documents">
               <button
                 type="button"
@@ -3089,8 +3119,8 @@ function InboxView({
               {foundShown.length === 0 && (
                 <p className="meta">
                   {foundMailTab === "add"
-                    ? "Nothing left to add from this look."
-                    : "Nothing added yet. Open Add, then choose a file."}
+                    ? "Nothing new to add. Already-filed files are in Added."
+                    : "Nothing from this look is in your index yet."}
                 </p>
               )}
               {foundShown.map((item) => (
@@ -3104,15 +3134,25 @@ function InboxView({
                     </p>
                   </div>
                   {foundMailTab === "add" ? (
-                    <button
-                      className="primary"
-                      disabled={confirmingId !== null}
-                      onClick={() => void onAddFound(item)}
-                    >
-                      {confirmingId === item.id && busyKind === "mailbox" ? "Opening…" : "Add"}
-                    </button>
+                    <div className="found-email-actions">
+                      <button
+                        className="primary"
+                        disabled={confirmingId !== null}
+                        onClick={() => void onAddFound(item)}
+                      >
+                        {confirmingId === item.id && busyKind === "mailbox" ? "Opening…" : "Add"}
+                      </button>
+                      <button
+                        className="secondary"
+                        type="button"
+                        disabled={confirmingId !== null}
+                        onClick={() => onSkipFound(item)}
+                      >
+                        Skip
+                      </button>
+                    </div>
                   ) : (
-                    <span className="found-email-done">Added</span>
+                    <span className="found-email-done">In your index</span>
                   )}
                 </div>
               ))}
