@@ -30,7 +30,7 @@ import {
   withoutSampleInbox,
 } from "./lib/inbox";
 import { computeStatus, locationLine } from "./data/status";
-import { extractPdfText, isImage, isPdf } from "./lib/pdf";
+import { extractPdfText, isImage, isPdf, isPdfBlob, renderPdfPages } from "./lib/pdf";
 import { extractImageText } from "./lib/ocr";
 import { consumeSharedFile, isDesktopLayout, isIos, isStandalone } from "./lib/pwa";
 import { buildBackup, downloadBackup, parseBackupFile, restoreBackup } from "./lib/backup";
@@ -2355,20 +2355,27 @@ function DocumentDetail({
         const blobs = await loadDocumentPages(doc.id, expected);
         if (!alive) return;
         if (blobs.length >= expected) {
-          const cleaned = await Promise.all(
-            blobs.map((blob) =>
-              isVisualImage(blob.type || doc.mimeType, doc.fileName) ? bleachScanBlob(blob) : Promise.resolve(blob),
-            ),
-          );
+          const viewPages: Array<{ blob: Blob; image: boolean }> = [];
+          for (const blob of blobs) {
+            if (isPdfBlob(blob, doc.mimeType, doc.fileName)) {
+              try {
+                const rendered = await renderPdfPages(blob);
+                for (const page of rendered) viewPages.push({ blob: page, image: true });
+              } catch {
+                viewPages.push({ blob, image: false });
+              }
+              continue;
+            }
+            if (isVisualImage(blob.type || doc.mimeType, doc.fileName)) {
+              viewPages.push({ blob: await bleachScanBlob(blob), image: true });
+              continue;
+            }
+            viewPages.push({ blob, image: false });
+          }
           if (!alive) return;
           urls.forEach((url) => URL.revokeObjectURL(url));
-          urls = cleaned.map((blob) => URL.createObjectURL(blob));
-          setPages(
-            cleaned.map((blob, index) => ({
-              url: urls[index],
-              image: isVisualImage(blob.type || doc.mimeType, doc.fileName),
-            })),
-          );
+          urls = viewPages.map((page) => URL.createObjectURL(page.blob));
+          setPages(viewPages.map((page, index) => ({ url: urls[index], image: page.image })));
           setPagesLoading(false);
           return;
         }
@@ -2394,7 +2401,7 @@ function DocumentDetail({
       </p>
       {pagesLoading && pages.length === 0 && (
         <div className="preview preview-loading" role="status">
-          Opening the scan…
+          Opening the document…
         </div>
       )}
       {pages.length > 0 && (
