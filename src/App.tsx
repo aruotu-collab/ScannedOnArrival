@@ -2780,20 +2780,52 @@ function InboxView({
         <div className="card">
           {inboxReady ? (
             <div className="notice">
-              Forwarding is opt-in. A PDF sent here is held only until you confirm or remove it. After confirm, this
-              device keeps the copy and we ask the receive server to drop its copy. Remove drops it without saving.
+              This address only receives PDFs you forward. ScannedOnArrival does not open your email for you. After
+              you confirm, this device keeps the copy and we ask the receive server to drop its copy.
             </div>
           ) : (
             <div className="notice warn">
-              This address is issued. Mail delivery is still finishing with the receive provider. Until then, add
-              the PDF from Mail on this phone.
+              This address is issued. Mail delivery is still finishing with the receive provider. Until then, add the
+              PDF from Files on this phone.
             </div>
           )}
-          <h3>Your document inbox</h3>
-          <p className="meta">This address belongs to this device. Copy it, then forward a bill from Mail.</p>
+          <h3>Forward a bill from your email</h3>
+          <p className="meta">
+            You have to leave this screen, open the email app where the bill arrived, and forward that email to the
+            address below.
+          </p>
+          <ol className="inbox-howto">
+            <li>
+              <div>
+                <strong>Copy this address</strong>
+                <span>It belongs only to this device.</span>
+              </div>
+            </li>
+            <li>
+              <div>
+                <strong>Open your email app</strong>
+                <span>Gmail, Outlook, Mail, or whichever app received the bill.</span>
+              </div>
+            </li>
+            <li>
+              <div>
+                <strong>Forward the email with the PDF</strong>
+                <span>Paste the address as the recipient, then send.</span>
+              </div>
+            </li>
+            <li>
+              <div>
+                <strong>Come back here</strong>
+                <span>The PDF appears below so you can Confirm or Remove it.</span>
+              </div>
+            </li>
+          </ol>
           <InboxAddressCard address={settings.inboxAddress} onCopied={onToast} />
+          <p className="meta" style={{ marginTop: 16 }}>
+            Already have the PDF saved on this phone? Add it from Files — you do not need to forward.
+          </p>
           <label className="secondary inbox-mail-add">
-            Add a PDF from Mail
+            Add a PDF from Files
             <input
               type="file"
               accept="application/pdf,image/*"
@@ -2809,8 +2841,8 @@ function InboxView({
             {pending.length === 0 && (
               <p className="meta">
                 {inboxReady
-                  ? "Nothing is waiting to confirm. Forward a PDF to this address."
-                  : "Nothing is waiting to confirm. Forwarded mail will land here."}
+                  ? "Nothing is waiting yet. Open your email, forward the PDF to the address above, then return here."
+                  : "Nothing is waiting yet. Forwarded mail will land here once delivery is ready."}
               </p>
             )}
             {pending.map((item) => {
