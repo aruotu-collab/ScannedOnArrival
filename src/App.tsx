@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent } from "react";
-import { createPortal } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import type {
   AddDraft,
   AppSettings,
@@ -561,11 +561,35 @@ export default function App() {
     setView("demo");
   };
 
+  const viewRef = useRef(view);
+  viewRef.current = view;
+
   const goToView = (next: ViewId) => {
     const target = next === "ready" ? "documents" : next;
-    if (view === "demo" && target === "documents") setFromDemoNav(true);
-    setView(target);
-    documentsScroller().scrollTo({ top: 0, left: 0, behavior: "auto" });
+    const current = viewRef.current === "ready" ? "documents" : viewRef.current;
+    if (target === current) return;
+    if (current === "demo" && target === "documents") setFromDemoNav(true);
+
+    const indexOf = (id: ViewId) => (id === "demo" ? -1 : Math.max(0, NAV_ITEMS.findIndex((item) => item.id === id)));
+    const forward = target === "demo" ? true : current === "demo" ? false : indexOf(target) > indexOf(current);
+    document.documentElement.dataset.navDir = forward ? "forward" : "back";
+
+    const apply = () => {
+      flushSync(() => setView(target));
+      documentsScroller().scrollTo({ top: 0, left: 0, behavior: "auto" });
+    };
+
+    if (!prefersReducedMotion() && typeof document.startViewTransition === "function") {
+      document.documentElement.classList.remove("nav-css");
+      try {
+        document.startViewTransition(apply);
+        return;
+      } catch {
+        /* fall through to the CSS slide */
+      }
+    }
+    document.documentElement.classList.add("nav-css");
+    apply();
   };
 
   const openRealThing = () => {
@@ -974,6 +998,7 @@ export default function App() {
       </aside>
 
       <main className="main">
+        <div className="page-stage">
         <header className="topbar">
           <div>
             <ProductBadge />
@@ -986,7 +1011,7 @@ export default function App() {
                 {view === "settings" && "Settings"}
               </h1>
               {(view === "documents" || view === "ready") && (
-                <button type="button" className="try-demo-btn" onClick={() => setView("demo")}>
+                <button type="button" className="try-demo-btn" onClick={() => goToView("demo")}>
                   Try Demo
                 </button>
               )}
@@ -1072,7 +1097,7 @@ export default function App() {
                 const doc = documents.find((item) => item.id === id);
                 setSelectedId(id);
                 setExpandedTypeId(doc?.typeId ?? null);
-                setView("documents");
+                goToView("documents");
               }}
             />
           )}
@@ -1167,6 +1192,7 @@ export default function App() {
               }}
             />
           )}
+        </div>
         </div>
       </main>
 
