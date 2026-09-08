@@ -529,6 +529,7 @@ export default function App() {
     original: DocumentRecord,
     next: DocumentRecord,
     makeCurrent: boolean,
+    toastMessage = "Listing updated",
   ) => {
     const updated: DocumentRecord = {
       ...next,
@@ -553,7 +554,23 @@ export default function App() {
     setEditingId(null);
     setSelectedId(updated.id);
     setExpandedTypeId(updated.typeId);
-    setToast("Listing updated");
+    setToast(toastMessage);
+    return updated;
+  };
+
+  const moveDocument = async (original: DocumentRecord, typeId: string, categoryId: string, makeCurrent: boolean) => {
+    const next = {
+      ...original,
+      typeId: typeId as DocumentTypeId,
+      categoryId,
+    };
+    const moved = await saveEditedDocument(
+      original,
+      next,
+      makeCurrent,
+      `Moved to ${categoryLabel(categoryId)} → ${typeById(typeId).folderName}`,
+    );
+    return moved;
   };
 
   useEffect(() => {
@@ -1076,7 +1093,7 @@ export default function App() {
             <p>
               {view === "demo" && "Scan the letter, check the page, then save it under Council Tax."}
               {(view === "documents" || view === "ready") && "Scan a letter, then tap a category. What’s current, missing, or overdue sits with the file."}
-              {view === "tree" && "A filing-cabinet view. The folders are logical; the files can live anywhere."}
+              {view === "tree" && "A filing-cabinet view. Move a file to another folder, or add a category. The files can live anywhere."}
               {view === "inbox" && "Letterbox or inbox: both are ways documents arrive. Email stays optional."}
               {view === "settings" && "Keep the privacy story clear. Local by default, convenience only if you choose it."}
             </p>
@@ -1174,6 +1191,7 @@ export default function App() {
           {view === "tree" && (
             <TreeView
               documents={searching ? searchHits : documents}
+              allDocuments={documents}
               query={docQuery}
               onSelect={(id) => {
                 const doc = documents.find((item) => item.id === id);
@@ -1182,6 +1200,9 @@ export default function App() {
                 setFocusDocId(id);
                 goToView("documents");
               }}
+              onMove={moveDocument}
+              onCreateCategory={createCategory}
+              onCreateType={createType}
             />
           )}
           {view === "inbox" && (
@@ -3046,15 +3067,25 @@ function DocumentDetail({
 
 function TreeView({
   documents,
+  allDocuments,
   query,
   onSelect,
+  onMove,
+  onCreateCategory,
+  onCreateType,
 }: {
   documents: DocumentRecord[];
+  allDocuments: DocumentRecord[];
   query?: string;
   onSelect: (id: string) => void;
+  onMove: (original: DocumentRecord, typeId: string, categoryId: string, makeCurrent: boolean) => Promise<DocumentRecord>;
+  onCreateCategory: (label: string) => Promise<{ categoryId: string; typeId: string }>;
+  onCreateType: (label: string, categoryId: string) => Promise<{ typeId: string; categoryId: string }>;
 }) {
   const [openCategories, setOpenCategories] = useState<string[]>([]);
   const [openTypes, setOpenTypes] = useState<string[]>([]);
+  const [movingDoc, setMovingDoc] = useState<DocumentRecord | null>(null);
+  const [creating, setCreating] = useState<null | { kind: "category" } | { kind: "type"; categoryId: string }>(null);
   const searching = Boolean(query?.trim());
   const grouped = useMemo(() => {
     return allCategories().map((category) => {
@@ -3071,7 +3102,7 @@ function TreeView({
           .filter((t) => (searching ? t.docs.length > 0 : t.type.id !== "other" || t.docs.length)),
       };
     }).filter((g) => (searching ? g.types.some((t) => t.docs.length > 0) : g.types.some((t) => t.type.id !== "other" || t.docs.length)));
-  }, [documents, searching]);
+  }, [documents, searching, allDocuments.length, allCategories().length, allTypes().length]);
 
   useEffect(() => {
     if (!searching) return;
@@ -3096,6 +3127,11 @@ function TreeView({
       <div className="tree-root">
         <span className="tree-dot static" aria-hidden="true" />
         <strong>My Documents</strong>
+        {!searching && (
+          <button type="button" className="tree-action" onClick={() => setCreating({ kind: "category" })}>
+            New category
+          </button>
+        )}
       </div>
       {searching && grouped.length === 0 && (
         <div className="card empty">
@@ -3120,6 +3156,15 @@ function TreeView({
                 <button type="button" className="tree-name" onClick={() => toggleCategory(group.category.id)}>
                   {group.category.label} ({count})
                 </button>
+                {!searching && (
+                  <button
+                    type="button"
+                    className="tree-action"
+                    onClick={() => setCreating({ kind: "type", categoryId: group.category.id })}
+                  >
+                    New folder
+                  </button>
+                )}
               </div>
               {categoryOpen && (
                 <ul className="tree-list">
@@ -3167,6 +3212,9 @@ function TreeView({
                                         : `📍 ${doc.locationLabel}`}
                                     </span>
                                   </button>
+                                  <button type="button" className="tree-action" onClick={() => setMovingDoc(doc)}>
+                                    Move
+                                  </button>
                                 </div>
                               </li>
                             ))}
@@ -3181,7 +3229,314 @@ function TreeView({
           );
         })}
       </ul>
+      {movingDoc && (
+        <MoveDocumentSheet
+          doc={movingDoc}
+          documents={allDocuments}
+          onClose={() => setMovingDoc(null)}
+          onCreateCategory={onCreateCategory}
+          onCreateType={onCreateType}
+          onMove={async (typeId, categoryId, makeCurrent) => {
+            const original = movingDoc;
+            setMovingDoc(null);
+            try {
+              const moved = await onMove(original, typeId, categoryId, makeCurrent);
+              setOpenCategories((current) => [...new Set([...current, moved.categoryId])]);
+              setOpenTypes((current) => [...new Set([...current, moved.typeId])]);
+            } catch (err) {
+              setMovingDoc(original);
+              throw err;
+            }
+          }}
+        />
+      )}
+      {creating && (
+        <NewFolderSheet
+          kind={creating.kind}
+          categoryLabel={creating.kind === "type" ? categoryLabel(creating.categoryId) : undefined}
+          onClose={() => setCreating(null)}
+          onCreate={async (label) => {
+            const request = creating;
+            setCreating(null);
+            try {
+              if (request.kind === "category") {
+                const created = await onCreateCategory(label);
+                setOpenCategories((current) => [...new Set([...current, created.categoryId])]);
+                setOpenTypes((current) => [...new Set([...current, created.typeId])]);
+                return;
+              }
+              const created = await onCreateType(label, request.categoryId);
+              setOpenCategories((current) => [...new Set([...current, created.categoryId])]);
+              setOpenTypes((current) => [...new Set([...current, created.typeId])]);
+            } catch (err) {
+              setCreating(request);
+              throw err;
+            }
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+function MoveDocumentSheet({
+  doc,
+  documents,
+  onClose,
+  onMove,
+  onCreateCategory,
+  onCreateType,
+}: {
+  doc: DocumentRecord;
+  documents: DocumentRecord[];
+  onClose: () => void;
+  onMove: (typeId: string, categoryId: string, makeCurrent: boolean) => Promise<void>;
+  onCreateCategory: (label: string) => Promise<{ categoryId: string; typeId: string }>;
+  onCreateType: (label: string, categoryId: string) => Promise<{ typeId: string; categoryId: string }>;
+}) {
+  const [categoryId, setCategoryId] = useState(doc.categoryId);
+  const [typeId, setTypeId] = useState(doc.typeId);
+  const [creatingCategory, setCreatingCategory] = useState(false);
+  const [creatingType, setCreatingType] = useState(false);
+  const [newCategory, setNewCategory] = useState("");
+  const [newType, setNewType] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const destHasCurrent = documents.some((item) => item.id !== doc.id && item.typeId === typeId && item.isCurrent);
+  const unchanged = typeId === doc.typeId && categoryId === doc.categoryId;
+  const typesHere = allTypes().filter((type) => type.categoryId === categoryId);
+
+  const submit = async (makeCurrent: boolean) => {
+    if (unchanged || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onMove(typeId, categoryId, makeCurrent);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not move that listing.");
+      setBusy(false);
+    }
+  };
+
+  return createPortal(
+    <div className="modal-back" onClick={onClose}>
+      <div className="modal" onClick={(event) => event.stopPropagation()}>
+        <h2>Move listing</h2>
+        <p className="meta">
+          {doc.title} is in {categoryLabel(doc.categoryId)} → {typeById(doc.typeId).folderName}. Choose another folder.
+          The file itself stays where it is.
+        </p>
+        {error && (
+          <div className="modal-status warn" role="status">
+            {error}
+          </div>
+        )}
+        <label className="field">
+          <span>Category</span>
+          <select
+            value={creatingCategory ? "__new__" : categoryId}
+            onChange={(event) => {
+              if (event.target.value === "__new__") {
+                setCreatingCategory(true);
+                setCreatingType(false);
+                return;
+              }
+              setCreatingCategory(false);
+              setCreatingType(false);
+              const nextCategory = event.target.value;
+              const types = allTypes().filter((type) => type.categoryId === nextCategory);
+              const keep = types.some((type) => type.id === typeId);
+              setCategoryId(nextCategory);
+              setTypeId(keep ? typeId : (types[0]?.id ?? "other"));
+            }}
+          >
+            {allCategories().map((category) => (
+              <option key={category.id} value={category.id}>
+                {category.label}
+              </option>
+            ))}
+            <option value="__new__">Create a new category…</option>
+          </select>
+        </label>
+        {creatingCategory && (
+          <div className="row">
+            <label className="field" style={{ flex: 1 }}>
+              <span>New category name</span>
+              <input
+                value={newCategory}
+                onChange={(event) => setNewCategory(event.target.value)}
+                placeholder="School, Pets, Work…"
+              />
+            </label>
+            <button
+              className="primary"
+              type="button"
+              disabled={!newCategory.trim()}
+              onClick={() => {
+                void (async () => {
+                  try {
+                    const created = await onCreateCategory(newCategory);
+                    setCreatingCategory(false);
+                    setNewCategory("");
+                    setCategoryId(created.categoryId);
+                    setTypeId(created.typeId as DocumentTypeId);
+                  } catch (err) {
+                    setError(err instanceof Error ? err.message : "Could not create that category.");
+                  }
+                })();
+              }}
+            >
+              Create
+            </button>
+          </div>
+        )}
+        <label className="field">
+          <span>Folder</span>
+          <select
+            value={creatingType ? "__new__" : typeId}
+            onChange={(event) => {
+              if (event.target.value === "__new__") {
+                setCreatingType(true);
+                return;
+              }
+              setCreatingType(false);
+              const type = typeById(event.target.value);
+              setTypeId(type.id);
+              setCategoryId(type.categoryId);
+            }}
+          >
+            {typesHere.map((type) => (
+              <option key={type.id} value={type.id}>
+                {type.folderName}
+              </option>
+            ))}
+            <option value="__new__">Create a new folder…</option>
+          </select>
+        </label>
+        {creatingType && (
+          <div className="row">
+            <label className="field" style={{ flex: 1 }}>
+              <span>New folder name</span>
+              <input
+                value={newType}
+                onChange={(event) => setNewType(event.target.value)}
+                placeholder="School letter, NHS letter…"
+              />
+            </label>
+            <button
+              className="primary"
+              type="button"
+              disabled={!newType.trim() || creatingCategory}
+              onClick={() => {
+                void (async () => {
+                  try {
+                    const created = await onCreateType(newType, categoryId);
+                    setCreatingType(false);
+                    setNewType("");
+                    setTypeId(created.typeId as DocumentTypeId);
+                    setCategoryId(created.categoryId);
+                  } catch (err) {
+                    setError(err instanceof Error ? err.message : "Could not create that folder.");
+                  }
+                })();
+              }}
+            >
+              Create
+            </button>
+          </div>
+        )}
+        {destHasCurrent && !unchanged && (
+          <div className="notice">
+            This folder already has a current version. Set this as current, or keep it as another relevant copy.
+          </div>
+        )}
+        <div className="row">
+          <button className="secondary" type="button" onClick={onClose}>
+            Cancel
+          </button>
+          {destHasCurrent && !unchanged ? (
+            <>
+              <button className="secondary" type="button" disabled={busy} onClick={() => void submit(false)}>
+                Keep as another relevant copy
+              </button>
+              <button className="primary" type="button" disabled={busy} onClick={() => void submit(true)}>
+                Set as current version
+              </button>
+            </>
+          ) : (
+            <button className="primary" type="button" disabled={unchanged || busy} onClick={() => void submit(!destHasCurrent)}>
+              Move here
+            </button>
+          )}
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+function NewFolderSheet({
+  kind,
+  categoryLabel: parentLabel,
+  onClose,
+  onCreate,
+}: {
+  kind: "category" | "type";
+  categoryLabel?: string;
+  onClose: () => void;
+  onCreate: (label: string) => Promise<void>;
+}) {
+  const [label, setLabel] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    if (!label.trim() || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onCreate(label);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not create that folder.");
+      setBusy(false);
+    }
+  };
+
+  return createPortal(
+    <div className="modal-back" onClick={onClose}>
+      <div className="modal" onClick={(event) => event.stopPropagation()}>
+        <h2>{kind === "category" ? "New category" : "New folder"}</h2>
+        <p className="meta">
+          {kind === "category"
+            ? "This adds a category and a folder inside it. You can move files into it from the tree."
+            : `This folder will sit under ${parentLabel ?? "this category"}.`}
+        </p>
+        {error && (
+          <div className="modal-status warn" role="status">
+            {error}
+          </div>
+        )}
+        <label className="field">
+          <span>{kind === "category" ? "Category name" : "Folder name"}</span>
+          <input
+            value={label}
+            onChange={(event) => setLabel(event.target.value)}
+            placeholder={kind === "category" ? "School, Pets, Work…" : "School letter, NHS letter…"}
+            autoFocus
+          />
+        </label>
+        <div className="row">
+          <button className="secondary" type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="primary" type="button" disabled={!label.trim() || busy} onClick={() => void submit()}>
+            Create
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -3780,7 +4135,7 @@ function EditDocumentModal({
 }: {
   doc: DocumentRecord;
   onClose: () => void;
-  onSave: (original: DocumentRecord, next: DocumentRecord, makeCurrent: boolean) => Promise<void>;
+  onSave: (original: DocumentRecord, next: DocumentRecord, makeCurrent: boolean) => Promise<unknown>;
   onCreateCategory: (label: string) => Promise<{ categoryId: string; typeId: string }>;
   onCreateType: (label: string, categoryId: string) => Promise<{ typeId: string; categoryId: string }>;
 }) {

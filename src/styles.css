@@ -903,6 +903,7 @@ html.nav-css[data-nav-dir="back"] .page-stage {
 .tree-root {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
   padding: 4px 16px 8px;
 }
@@ -1012,6 +1013,22 @@ html.nav-css[data-nav-dir="back"] .page-stage {
   color: var(--muted);
   font-size: 0.78rem;
   font-family: var(--font-ui);
+}
+
+.tree-action {
+  flex-shrink: 0;
+  border: 0;
+  border-radius: 999px;
+  padding: 5px 10px;
+  background: #efe7d7;
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.tree-line .tree-action {
+  margin-right: 6px;
 }
 
 .modal-back {
