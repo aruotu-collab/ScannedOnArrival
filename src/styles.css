@@ -389,6 +389,7 @@ button {
   flex-direction: column;
   align-items: stretch;
   gap: 8px;
+  padding-bottom: 6px;
 }
 
 .scan-cta-btn {
@@ -397,21 +398,47 @@ button {
   gap: 14px;
   width: 100%;
   padding: 16px 18px;
-  border: 0;
+  border: 1px solid rgba(255, 236, 170, 0.55);
+  border-bottom-color: #8d6b1c;
   border-radius: 18px;
   text-align: left;
   color: #1b3a2f;
-  background: linear-gradient(160deg, #f6e3a6 0%, #d4b15c 48%, #b8902e 100%);
+  background: linear-gradient(180deg, #f8e9b4 0%, #e0c36a 42%, #c49a32 100%);
   box-shadow:
-    0 16px 36px rgba(156, 118, 32, 0.32),
-    inset 0 1px 0 rgba(255, 255, 255, 0.45);
+    inset 0 1px 0 rgba(255, 255, 255, 0.72),
+    inset 0 -2px 0 rgba(120, 86, 18, 0.16),
+    0 5px 0 #8a6a1e,
+    0 12px 20px rgba(120, 86, 18, 0.28),
+    0 22px 36px rgba(156, 118, 32, 0.2);
+  transform: translateY(-2px);
+  transition: transform 0.16s ease, box-shadow 0.16s ease;
 }
 
 .scan-cta-btn:hover {
-  transform: translateY(-1px);
+  transform: translateY(-3px);
   box-shadow:
-    0 20px 40px rgba(156, 118, 32, 0.4),
-    inset 0 1px 0 rgba(255, 255, 255, 0.55);
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    inset 0 -2px 0 rgba(120, 86, 18, 0.16),
+    0 6px 0 #8a6a1e,
+    0 16px 24px rgba(120, 86, 18, 0.3),
+    0 28px 42px rgba(156, 118, 32, 0.22);
+}
+
+.scan-cta-btn:active {
+  transform: translateY(2px);
+  box-shadow:
+    inset 0 2px 4px rgba(120, 86, 18, 0.22),
+    0 1px 0 #8a6a1e,
+    0 4px 10px rgba(120, 86, 18, 0.18);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scan-cta-btn,
+  .scan-cta-btn:hover,
+  .scan-cta-btn:active {
+    transition: none;
+    transform: none;
+  }
 }
 
 .scan-cta-icon {
@@ -423,7 +450,9 @@ button {
   flex-shrink: 0;
   color: #f6e3a6;
   background: #1b3a2f;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  box-shadow:
+    inset 0 2px 4px rgba(0, 0, 0, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.14);
 }
 
 .scan-cta-glyph {
@@ -977,13 +1006,19 @@ button {
   padding: 0;
 }
 
+.page-rail-wrap {
+  min-width: 0;
+}
+
 .page-rail {
+  position: relative;
   width: 100%;
   min-width: 0;
   overflow: hidden;
   touch-action: none;
   overscroll-behavior-x: contain;
   user-select: none;
+  border-radius: 12px;
 }
 
 .page-rail.swipeable {
@@ -1024,6 +1059,67 @@ button {
 .page-slide figcaption {
   margin: 0;
   padding: 6px 0 10px;
+  text-align: center;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--ink-soft);
+}
+
+.page-rail-edge {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 22px;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.page-rail-edge.prev {
+  left: 0;
+  background: linear-gradient(90deg, rgba(27, 25, 20, 0.1), transparent);
+}
+
+.page-rail-edge.next {
+  right: 0;
+  background: linear-gradient(270deg, rgba(27, 25, 20, 0.1), transparent);
+}
+
+.page-pips {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  transform: translateX(-50%);
+  padding: 6px 10px;
+  border-radius: 99px;
+  background: rgba(27, 25, 20, 0.42);
+}
+
+.page-pip {
+  display: block;
+  width: 16px;
+  min-width: 16px;
+  height: 3px;
+  min-height: 3px;
+  padding: 0;
+  border: 0;
+  border-radius: 99px;
+  appearance: none;
+  background: rgba(255, 255, 255, 0.45);
+}
+
+.page-pip.on {
+  width: 26px;
+  min-width: 26px;
+  background: #fff;
+}
+
+.page-rail-caption {
+  margin: 6px 0 0;
   text-align: center;
   font-size: 0.75rem;
   font-weight: 700;
@@ -2238,6 +2334,7 @@ button {
 }
 
 .demo-page-rail {
+  position: relative;
   flex: 1 1 auto;
   min-height: 0;
   width: 100%;

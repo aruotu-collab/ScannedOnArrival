@@ -1166,6 +1166,7 @@ function DemoView({
                 </div>
               ))}
             </div>
+            <PagePips count={pages.length} index={activePage} demo onSelect={goToPage} />
           </div>
           <label className="scan-select">
             <input
@@ -1897,6 +1898,40 @@ function FileViewer({
   );
 }
 
+function PagePips({
+  count,
+  index,
+  demo,
+  onSelect,
+}: {
+  count: number;
+  index: number;
+  demo?: boolean;
+  onSelect?: (index: number) => void;
+}) {
+  if (count < 2) return null;
+  return (
+    <div className={`page-pips${demo ? " demo" : ""}`} aria-hidden="true">
+      {Array.from({ length: count }, (_, pip) =>
+        onSelect ? (
+          <button
+            key={pip}
+            type="button"
+            className={`page-pip${pip === index ? " on" : ""}`}
+            tabIndex={-1}
+            onClick={(event) => {
+              event.stopPropagation();
+              onSelect(pip);
+            }}
+          />
+        ) : (
+          <span key={pip} className={`page-pip${pip === index ? " on" : ""}`} />
+        ),
+      )}
+    </div>
+  );
+}
+
 function PageRail({
   pages,
   title,
@@ -1934,68 +1969,73 @@ function PageRail({
   };
 
   return (
-    <div
-      className={`page-rail ${pages.length > 1 ? "swipeable" : ""}`}
-      aria-label="Document pages"
-      onPointerDown={(event) => {
-        event.stopPropagation();
-        if (pages.length < 2) return;
-        event.currentTarget.setPointerCapture(event.pointerId);
-        swipeStart.current = { x: event.clientX, y: event.clientY, page: index };
-        swiped.current = false;
-        setDragging(true);
-        setDragX(0);
-      }}
-      onPointerMove={(event) => {
-        event.stopPropagation();
-        const start = swipeStart.current;
-        if (!start) return;
-        const dx = event.clientX - start.x;
-        const dy = event.clientY - start.y;
-        if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return;
-        if (Math.abs(dx) <= Math.abs(dy)) return;
-        const atStart = start.page === 0 && dx > 0;
-        const atEnd = start.page === pages.length - 1 && dx < 0;
-        setDragX(atStart || atEnd ? dx * 0.28 : dx);
-      }}
-      onPointerUp={endDrag}
-      onPointerCancel={endDrag}
-      onTouchStart={(event) => event.stopPropagation()}
-      onTouchMove={(event) => event.stopPropagation()}
-    >
+    <div className={`page-rail-wrap${demo ? " demo" : ""}`}>
       <div
-        className={`page-rail-track${dragging ? " dragging" : ""}`}
-        style={{ transform: `translateX(calc(-${index * 100}% + ${dragX}px))` }}
+        className={`page-rail ${pages.length > 1 ? "swipeable" : ""}`}
+        aria-label="Document pages"
+        onPointerDown={(event) => {
+          event.stopPropagation();
+          if (pages.length < 2) return;
+          event.currentTarget.setPointerCapture(event.pointerId);
+          swipeStart.current = { x: event.clientX, y: event.clientY, page: index };
+          swiped.current = false;
+          setDragging(true);
+          setDragX(0);
+        }}
+        onPointerMove={(event) => {
+          event.stopPropagation();
+          const start = swipeStart.current;
+          if (!start) return;
+          const dx = event.clientX - start.x;
+          const dy = event.clientY - start.y;
+          if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return;
+          if (Math.abs(dx) <= Math.abs(dy)) return;
+          const atStart = start.page === 0 && dx > 0;
+          const atEnd = start.page === pages.length - 1 && dx < 0;
+          setDragX(atStart || atEnd ? dx * 0.28 : dx);
+        }}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+        onTouchStart={(event) => event.stopPropagation()}
+        onTouchMove={(event) => event.stopPropagation()}
       >
-        {pages.map((page, pageIndex) => (
-          <figure key={`${title}-page-${pageIndex}`} className="page-slide">
-            <div
-              role="button"
-              tabIndex={0}
-              className="preview-open"
-              onClick={() => {
-                if (swiped.current) return;
-                onOpen(pageIndex);
-              }}
-              onKeyDown={(event) => {
-                if (event.key !== "Enter" && event.key !== " ") return;
-                event.preventDefault();
-                onOpen(pageIndex);
-              }}
-            >
-              <img src={page.url} alt={`${title} page ${pageIndex + 1}`} draggable={false} />
-              {demo && (
-                <span className="demo-ribbon demo-ribbon-corner" aria-hidden="true">
-                  Demo
-                </span>
-              )}
-            </div>
-            <figcaption>
-              Page {pageIndex + 1} of {pages.length}
-            </figcaption>
-          </figure>
-        ))}
+        <div
+          className={`page-rail-track${dragging ? " dragging" : ""}`}
+          style={{ transform: `translateX(calc(-${index * 100}% + ${dragX}px))` }}
+        >
+          {pages.map((page, pageIndex) => (
+            <figure key={`${title}-page-${pageIndex}`} className="page-slide">
+              <div
+                role="button"
+                tabIndex={0}
+                className="preview-open"
+                onClick={() => {
+                  if (swiped.current) return;
+                  onOpen(pageIndex);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter" && event.key !== " ") return;
+                  event.preventDefault();
+                  onOpen(pageIndex);
+                }}
+              >
+                <img src={page.url} alt={`${title} page ${pageIndex + 1}`} draggable={false} />
+                {demo && (
+                  <span className="demo-ribbon demo-ribbon-corner" aria-hidden="true">
+                    Demo
+                  </span>
+                )}
+              </div>
+            </figure>
+          ))}
+        </div>
+        {pages.length > 1 && index > 0 && <span className="page-rail-edge prev" />}
+        {pages.length > 1 && index < pages.length - 1 && <span className="page-rail-edge next" />}
+        <PagePips count={pages.length} index={index} demo={demo} onSelect={goTo} />
       </div>
+      {pages.length > 1 && (
+        <p className="page-rail-caption">Page {index + 1} of {pages.length}</p>
+      )}
     </div>
   );
 }
@@ -2103,9 +2143,6 @@ function DocumentDetail({
           <button type="button" className="secondary preview-full-btn" onClick={() => setViewerAt(0)}>
             View full file
           </button>
-          {pages.length > 1 && (
-            <p className="meta">Swipe to see the other {pages.length === 2 ? "page" : `${pages.length - 1} pages`}.</p>
-          )}
         </>
       )}
       {viewerAt !== null && (
