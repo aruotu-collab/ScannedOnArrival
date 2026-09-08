@@ -2034,6 +2034,31 @@ button {
   align-items: center;
 }
 
+.inbox-address {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 12px 0 0;
+}
+
+.inbox-address code {
+  display: block;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: var(--forest);
+  color: #cfc4ae;
+  font-size: 0.92rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  word-break: break-all;
+}
+
+.inbox-mail-add {
+  display: inline-flex;
+  margin-top: 14px;
+  width: fit-content;
+}
+
 .onboarding {
   min-height: 100vh;
   display: grid;

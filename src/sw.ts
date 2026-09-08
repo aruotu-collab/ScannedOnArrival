@@ -12,7 +12,7 @@ cleanupOutdatedCaches();
 
 registerRoute(
   new NavigationRoute(createHandlerBoundToURL("/index.html"), {
-    denylist: [/^\/share$/],
+    denylist: [/^\/share$/, /^\/api\//],
   }),
 );
 

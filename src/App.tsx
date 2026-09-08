@@ -20,6 +20,15 @@ import {
   typeById,
 } from "./data/taxonomy";
 import { SAMPLE_DOCUMENTS, SAMPLE_INBOX } from "./data/sample";
+import {
+  confirmInboxFile,
+  copyText,
+  downloadInboxFile,
+  ensureInboxAddress,
+  fetchPendingInbox,
+  mintInboxAddress,
+  withoutSampleInbox,
+} from "./lib/inbox";
 import { computeStatus, locationLine } from "./data/status";
 import { extractPdfText, isImage, isPdf } from "./lib/pdf";
 import { extractImageText } from "./lib/ocr";
@@ -51,7 +60,7 @@ import {
 
 const DEFAULT_SETTINGS: AppSettings = {
   privacyMode: "local",
-  inboxAddress: "you@inbox.scannedonarrival.app",
+  inboxAddress: "",
   gmailConnected: false,
   outlookConnected: false,
   showDemoHousehold: false,
@@ -279,6 +288,7 @@ export default function App() {
   const [toast, setToast] = useState<string | null>(null);
   const [demoLanding, setDemoLanding] = useState(false);
   const [fromDemoNav, setFromDemoNav] = useState(false);
+  const [inboxReady, setInboxReady] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -291,20 +301,26 @@ export default function App() {
         ]);
         if (!alive) return;
         setDocuments(docs);
-        if (storedSettings) {
-          const next = {
-            ...DEFAULT_SETTINGS,
-            ...storedSettings,
-            customCategories: storedSettings.customCategories ?? [],
-            customTypes: storedSettings.customTypes ?? [],
-          };
-          setCatalogExtras(next.customCategories, next.customTypes);
-          setSettings(next);
+        const next = {
+          ...DEFAULT_SETTINGS,
+          ...(storedSettings ?? {}),
+          customCategories: storedSettings?.customCategories ?? [],
+          customTypes: storedSettings?.customTypes ?? [],
+          inboxAddress: ensureInboxAddress(storedSettings?.inboxAddress),
+        };
+        setCatalogExtras(next.customCategories, next.customTypes);
+        setSettings(next);
+        if (!storedSettings || next.inboxAddress !== storedSettings.inboxAddress) {
+          await saveSettings(next);
         }
-        setInbox(storedInbox.length ? storedInbox : SAMPLE_INBOX);
+        const realInbox = withoutSampleInbox(storedInbox);
+        setInbox(realInbox);
+        if (realInbox.length !== storedInbox.length) await saveInbox(realInbox);
       } catch {
         if (!alive) return;
-        setInbox(SAMPLE_INBOX);
+        const fallback = { ...DEFAULT_SETTINGS, inboxAddress: mintInboxAddress() };
+        setSettings(fallback);
+        setInbox([]);
       } finally {
         if (alive) setHydrated(true);
       }
@@ -433,6 +449,34 @@ export default function App() {
     await saveInbox(next);
   };
 
+  useEffect(() => {
+    if (!hydrated || settings.privacyMode !== "inbox") {
+      setInboxReady(false);
+      return;
+    }
+    let alive = true;
+    const pull = async () => {
+      const result = await fetchPendingInbox(settings.inboxAddress);
+      if (!alive) return;
+      setInboxReady(result.ready);
+      if (!result.ready) return;
+      setInbox((prev) => {
+        const done = prev.filter((item) => item.status !== "pending");
+        const doneIds = new Set(done.map((item) => item.id));
+        const pending = result.items.filter((item) => !doneIds.has(item.id));
+        const next = [...pending, ...done];
+        void saveInbox(next);
+        return next;
+      });
+    };
+    void pull();
+    const timer = window.setInterval(() => void pull(), 20000);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+  }, [hydrated, settings.privacyMode, settings.inboxAddress]);
+
   const currentDocs = documents.filter((d) => d.isCurrent);
   const attention = useMemo(() => listAttention(documents), [documents]);
 
@@ -556,6 +600,14 @@ export default function App() {
 
   const addFromInbox = async (item: InboxItem) => {
     const type = typeById(item.typeId);
+    let file: File | null = null;
+    if (item.emailId && item.attachmentId) {
+      file = await downloadInboxFile(item, settings.inboxAddress);
+      if (!file) {
+        setToast("Could not download that PDF yet");
+        return;
+      }
+    }
     const draft: AddDraft = {
       method: "email-forward",
       title: item.period ? `${type.label} ${item.period}` : type.label,
@@ -564,15 +616,23 @@ export default function App() {
       period: item.period ?? "",
       issuedOn: "",
       expiresOn: "",
-      storageKind: settings.privacyMode === "inbox" ? "stored" : "referenced",
-      locationLabel:
-        settings.privacyMode === "inbox"
+      storageKind: file ? "stored" : settings.privacyMode === "inbox" ? "stored" : "referenced",
+      locationLabel: file
+        ? "Stored locally after inbox processing"
+        : settings.privacyMode === "inbox"
           ? "Stored locally after inbox processing"
           : "Email attachment — add locally to keep a private copy",
       locationProvider: "email",
-      fileName: item.attachmentName,
+      fileName: file?.name ?? item.attachmentName,
+      mimeType: file?.type,
+      file: file ?? undefined,
+      files: file ? [file] : undefined,
     };
     await addDocument(draft, true);
+    if (item.emailId) {
+      const dropped = await confirmInboxFile(item, settings.inboxAddress);
+      if (!dropped) setToast("Saved locally. The server copy may still be waiting to drop.");
+    }
     await persistInbox(inbox.map((row) => (row.id === item.id ? { ...row, status: "added" } : row)));
   };
 
@@ -766,11 +826,16 @@ export default function App() {
             <InboxView
               settings={settings}
               inbox={inbox}
+              inboxReady={inboxReady}
               foundEmail={foundEmail}
               documents={documents}
               onSettings={persistSettings}
               onConfirm={addFromInbox}
-              onFound={setFoundEmail}
+              onAddMail={(file) => {
+                setIncomingFile(file);
+                setAddStart("choose");
+                setAddOpen(true);
+              }}
               onAddFound={async (item) => {
                 const type = typeById(item.typeId);
                 await addDocument(
@@ -799,6 +864,7 @@ export default function App() {
               installPrompt={installPrompt}
               onInstalled={() => setInstallPrompt(null)}
               onSettings={persistSettings}
+              onToast={setToast}
               onExport={async () => {
                 try {
                   const backup = await buildBackup(settings);
@@ -818,11 +884,15 @@ export default function App() {
                     ...restored.settings,
                     customCategories: restored.settings.customCategories ?? [],
                     customTypes: restored.settings.customTypes ?? [],
+                    inboxAddress: ensureInboxAddress(restored.settings.inboxAddress),
                   };
                   setCatalogExtras(nextSettings.customCategories, nextSettings.customTypes);
                   setDocuments(restored.documents);
                   setSettings(nextSettings);
-                  setInbox(restored.inbox.length ? restored.inbox : SAMPLE_INBOX);
+                  setInbox(withoutSampleInbox(restored.inbox));
+                  if (nextSettings.inboxAddress !== restored.settings.inboxAddress) {
+                    await persistSettings(nextSettings);
+                  }
                   setFoundEmail([]);
                   setToast(`Restored ${restored.documents.length} documents`);
                 } catch (err) {
@@ -832,9 +902,13 @@ export default function App() {
               onReset={async () => {
                 await clearAllData();
                 setDocuments([]);
-                setInbox(SAMPLE_INBOX);
+                setInbox([]);
                 setFoundEmail([]);
-                await persistSettings({ ...DEFAULT_SETTINGS });
+                await persistSettings({
+                  ...DEFAULT_SETTINGS,
+                  inboxAddress: mintInboxAddress(),
+                  onboardingComplete: true,
+                });
               }}
             />
           )}
@@ -2533,54 +2607,97 @@ function TreeView({
   );
 }
 
+function InboxAddressCard({
+  address,
+  onCopied,
+  onNewAddress,
+}: {
+  address: string;
+  onCopied: (message: string) => void;
+  onNewAddress?: () => void;
+}) {
+  return (
+    <div className="inbox-address">
+      <code>{address || "Issuing your address…"}</code>
+      <div className="row">
+        <button
+          type="button"
+          className="secondary"
+          disabled={!address}
+          onClick={() => {
+            void (async () => {
+              const ok = await copyText(address);
+              onCopied(ok ? "Inbox address copied" : "Could not copy the address");
+            })();
+          }}
+        >
+          Copy address
+        </button>
+        {onNewAddress && (
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => {
+              if (
+                window.confirm(
+                  "Issue a new address? Mail sent to the old one will no longer reach this device.",
+                )
+              ) {
+                onNewAddress();
+              }
+            }}
+          >
+            New address
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function InboxView({
   settings,
   inbox,
+  inboxReady,
   foundEmail,
   documents,
   onSettings,
   onConfirm,
-  onFound,
   onAddFound,
+  onAddMail,
   onToast,
 }: {
   settings: AppSettings;
   inbox: InboxItem[];
+  inboxReady: boolean;
   foundEmail: FoundEmailDoc[];
   documents: DocumentRecord[];
   onSettings: (s: AppSettings) => Promise<void>;
   onConfirm: (item: InboxItem) => Promise<void>;
-  onFound: (items: FoundEmailDoc[]) => void;
   onAddFound: (item: FoundEmailDoc) => Promise<void>;
+  onAddMail: (file: File) => void;
   onToast: (msg: string) => void;
 }) {
   const pending = inbox.filter((i) => i.status === "pending");
-
-  const simulateSearch = () => {
-    onFound([
-      { id: "g1", typeId: "council_tax", title: "Council Tax 2026–27", period: "2026–27", mailbox: "gmail", added: false },
-      { id: "g2", typeId: "car_insurance", title: "Car Insurance Renewal", mailbox: "gmail", added: false },
-      { id: "g3", typeId: "bank_statement", title: "Bank Statement", period: "August 2026", mailbox: "gmail", added: false },
-    ]);
-    onToast("Found 3 recent documents in the connected mailbox (demo)");
-  };
+  const convenience = settings.privacyMode === "inbox";
 
   return (
     <div className="grid">
       <div className="card">
         <h2>Two ways to handle email</h2>
         <p className="meta">
-          Important documents arrive through the letterbox or the inbox. Version one never needs mailbox access.
+          Private local stays the default. Convenience inbox is opt-in: you get a private address on
+          inbox.scannedonarrival.com, unique to this device.
         </p>
         <div className="switch" style={{ marginTop: 14, width: "fit-content" }}>
           <button
-            className={settings.privacyMode === "local" ? "active" : ""}
+            className={!convenience ? "active" : ""}
             onClick={() => onSettings({ ...settings, privacyMode: "local" })}
           >
             Private local
           </button>
           <button
-            className={settings.privacyMode === "inbox" ? "active" : ""}
+            className={convenience ? "active" : ""}
             onClick={() => onSettings({ ...settings, privacyMode: "inbox" })}
           >
             Convenience inbox
@@ -2588,39 +2705,55 @@ function InboxView({
         </div>
       </div>
 
-      <div className="card">
-        <h3>Privacy-first MVP</h3>
-        <p className="meta">
-          Download the PDF from email, then choose Scan with Phone or Add → Upload PDF. ScannedOnArrival reads it locally,
-          identifies the type and date, and adds it to your index. The file never reaches a server.
-        </p>
-      </div>
-
-      {settings.privacyMode === "inbox" ? (
+      {convenience ? (
         <div className="card">
-          <div className="notice warn">
-            Convenience inbox mode means a forwarded PDF can pass through ScannedOnArrival servers. Be explicit with
-            people: this is optional, encrypted in transit, and should be deleted after processing.
-          </div>
-          <h3>Forward to your document inbox</h3>
-          <p className="meta">
-            {settings.inboxAddress}
-            <br />
-            Forward a council tax PDF and confirm before it replaces an older copy.
-          </p>
+          {inboxReady ? (
+            <div className="notice">
+              Forwarding is opt-in. A PDF sent here is held only until you confirm. After confirm, this device
+              keeps the copy and we ask the receive server to drop its copy.
+            </div>
+          ) : (
+            <div className="notice warn">
+              This address is issued. Mail delivery is still finishing with the receive provider. Until then, add
+              the PDF from Mail on this phone.
+            </div>
+          )}
+          <h3>Your document inbox</h3>
+          <p className="meta">This address belongs to this device. Copy it, then forward a bill from Mail.</p>
+          <InboxAddressCard address={settings.inboxAddress} onCopied={onToast} />
+          <label className="secondary inbox-mail-add">
+            Add a PDF from Mail
+            <input
+              type="file"
+              accept="application/pdf,image/*"
+              hidden
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) onAddMail(file);
+                event.target.value = "";
+              }}
+            />
+          </label>
           <div className="list" style={{ marginTop: 14 }}>
+            {pending.length === 0 && (
+              <p className="meta">
+                {inboxReady
+                  ? "Nothing is waiting to confirm. Forward a PDF to this address."
+                  : "Nothing is waiting to confirm. Forwarded mail will land here."}
+              </p>
+            )}
             {pending.map((item) => {
               const existing = documents.find((d) => d.typeId === item.typeId && d.isCurrent);
               return (
                 <div key={item.id} className="card inbox-item">
                   <div>
-                    <strong>
-                      New {typeById(item.typeId).label} document received
-                    </strong>
+                    <strong>New {typeById(item.typeId).label} document received</strong>
                     <p className="meta">
                       {item.period ?? item.attachmentName}
                       <br />
-                      {existing ? `Replaces your older ${existing.period ?? existing.title} copy` : "No previous copy indexed"}
+                      {existing
+                        ? `Replaces your older ${existing.period ?? existing.title} copy`
+                        : "No previous copy indexed"}
                     </p>
                   </div>
                   <button className="primary" onClick={() => onConfirm(item)}>
@@ -2634,41 +2767,36 @@ function InboxView({
       ) : (
         <div className="card">
           <h3>Inbox forwarding is off</h3>
-          <p className="meta">Stay in local mode and add email PDFs with the file picker. Turn on convenience inbox only if you want forwarding.</p>
+          <p className="meta">
+            Stay in local mode and add email PDFs with the file picker. Your private address is already issued —
+            turn on convenience inbox only if you want forwarding.
+          </p>
+          <InboxAddressCard address={settings.inboxAddress} onCopied={onToast} />
         </div>
       )}
 
       <div className="card">
         <h3>Optional Gmail or Outlook</h3>
         <p className="meta">
-          The app can search for likely attachments such as “council tax”, “insurance renewal”, or “statement”. You
-          choose what to add. This needs careful permissions and is never required.
+          Connecting a mailbox is the next phase. Those buttons are not live yet — they will never be required.
         </p>
         <div className="row" style={{ marginTop: 12 }}>
-          <button
-            className="secondary"
-            onClick={() => onSettings({ ...settings, gmailConnected: !settings.gmailConnected })}
-          >
-            {settings.gmailConnected ? "Disconnect Gmail" : "Connect Gmail"}
+          <button className="secondary" type="button" disabled>
+            Connect Gmail
           </button>
-          <button
-            className="secondary"
-            onClick={() => onSettings({ ...settings, outlookConnected: !settings.outlookConnected })}
-          >
-            {settings.outlookConnected ? "Disconnect Outlook" : "Connect Outlook"}
+          <button className="secondary" type="button" disabled>
+            Connect Outlook
           </button>
-          {(settings.gmailConnected || settings.outlookConnected) && (
-            <button className="primary" onClick={simulateSearch}>
-              Search recent documents
-            </button>
-          )}
         </div>
         {foundEmail.length > 0 && (
           <div className="list" style={{ marginTop: 16 }}>
             <h3>We found {foundEmail.length} recent documents</h3>
             {foundEmail.map((item) => (
               <div key={item.id} className="inbox-item">
-                <div className="meta">{item.title}{item.period ? ` · ${item.period}` : ""}</div>
+                <div className="meta">
+                  {item.title}
+                  {item.period ? ` · ${item.period}` : ""}
+                </div>
                 <button className="secondary" disabled={item.added} onClick={() => onAddFound(item)}>
                   {item.added ? "Added" : "Add"}
                 </button>
@@ -2689,6 +2817,7 @@ function SettingsView({
   onExport,
   onRestore,
   onReset,
+  onToast,
 }: {
   settings: AppSettings;
   installPrompt: BeforeInstallPromptEvent | null;
@@ -2697,6 +2826,7 @@ function SettingsView({
   onExport: () => Promise<void>;
   onRestore: (file: File) => Promise<void>;
   onReset: () => Promise<void>;
+  onToast: (msg: string) => void;
 }) {
   const standalone = isStandalone();
   const ios = isIos();
@@ -2753,13 +2883,15 @@ function SettingsView({
       </div>
       <div className="card">
         <h3>Inbox address</h3>
-        <label className="field">
-          <span>Forwarding address</span>
-          <input
-            value={settings.inboxAddress}
-            onChange={(e) => onSettings({ ...settings, inboxAddress: e.target.value })}
-          />
-        </label>
+        <p className="meta">
+          Issued for this device. It is not a mailbox you type yourself. Convenience inbox stays off until you
+          turn it on.
+        </p>
+        <InboxAddressCard
+          address={settings.inboxAddress}
+          onCopied={onToast}
+          onNewAddress={() => void onSettings({ ...settings, inboxAddress: mintInboxAddress() })}
+        />
       </div>
       <div className="card">
         <h2>Reminders</h2>

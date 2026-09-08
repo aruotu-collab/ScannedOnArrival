@@ -91,6 +91,9 @@ export interface InboxItem {
   typeId: DocumentTypeId;
   period?: string;
   status: "pending" | "added" | "dismissed";
+  emailId?: string;
+  attachmentId?: string;
+  contentType?: string;
 }
 
 export interface FoundEmailDoc {

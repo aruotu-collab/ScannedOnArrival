@@ -81,4 +81,12 @@ export default defineConfig({
   worker: {
     format: "es",
   },
+  server: {
+    proxy: {
+      "/api": {
+        target: "https://www.scannedonarrival.com",
+        changeOrigin: true,
+      },
+    },
+  },
 });
