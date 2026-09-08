@@ -2072,6 +2072,8 @@ button {
 
 .found-email-tabs button {
   flex: 1;
+  padding: 8px 6px;
+  font-size: 0.88rem;
 }
 
 .found-email-item {

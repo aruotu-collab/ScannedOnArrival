@@ -655,7 +655,14 @@ export default function App() {
       await persistInbox(inbox.map((row) => (row.id === pending.id ? { ...row, status: "added" } : row)));
     }
     if (found) {
-      setFoundEmail((rows) => rows.map((row) => (row.id === found.id ? { ...row, added: true } : row)));
+      const ref = mailboxRef(found);
+      setFoundEmail((rows) =>
+        rows.map((row) => (row.id === found.id ? { ...row, added: true, skipped: false } : row)),
+      );
+      const stillSkipped = (settings.mailboxSkipped ?? []).filter((key) => key !== ref);
+      if (stillSkipped.length !== (settings.mailboxSkipped ?? []).length) {
+        await persistSettings({ ...settings, mailboxSkipped: stillSkipped });
+      }
     }
     setToast(toastMessage);
   };
@@ -732,8 +739,9 @@ export default function App() {
         gmailConnected: mailbox === "gmail" ? true : settings.gmailConnected,
         outlookConnected: mailbox === "outlook" ? true : settings.outlookConnected,
       });
-      const fresh = extra.filter((item) => !item.added).length;
+      const fresh = extra.filter((item) => !item.added && !item.skipped).length;
       const remembered = extra.filter((item) => item.added).length;
+      const skippedCount = extra.filter((item) => item.skipped).length;
       const mailboxLabel = mailbox === "gmail" ? "Gmail" : "Outlook";
       setToast(
         fresh && remembered
@@ -742,7 +750,9 @@ export default function App() {
             ? `Found ${fresh} new ${mailboxLabel} file${fresh === 1 ? "" : "s"}`
             : remembered
               ? `No new ${mailboxLabel} files. ${remembered} already in your index`
-              : `No recent PDF attachments in ${mailboxLabel}`,
+              : skippedCount
+                ? `No new ${mailboxLabel} files. ${skippedCount} skipped`
+                : `No recent PDF attachments in ${mailboxLabel}`,
       );
     } catch (error) {
       setToast(error instanceof Error ? error.message : "Could not connect that mailbox.");
@@ -755,7 +765,9 @@ export default function App() {
   const disconnectMailbox = async (mailbox: "gmail" | "outlook") => {
     if (mailbox === "gmail") await disconnectGmail();
     else await disconnectOutlook();
-    setFoundEmail((current) => current.filter((item) => item.mailbox !== mailbox || item.added));
+    setFoundEmail((current) =>
+      current.filter((item) => item.mailbox !== mailbox || item.added || item.skipped),
+    );
     await persistSettings({
       ...settings,
       gmailConnected: mailbox === "gmail" ? false : settings.gmailConnected,
@@ -767,9 +779,21 @@ export default function App() {
   const skipFoundMailbox = async (item: FoundEmailDoc) => {
     const ref = mailboxRef(item);
     const skipped = [...new Set([...(settings.mailboxSkipped ?? []), ref])];
-    setFoundEmail((rows) => rows.filter((row) => mailboxRef(row) !== ref));
+    setFoundEmail((rows) =>
+      rows.map((row) => (mailboxRef(row) === ref ? { ...row, skipped: true, added: false } : row)),
+    );
     await persistSettings({ ...settings, mailboxSkipped: skipped });
-    setToast("Hidden from the next look");
+    setToast("Moved to Skipped");
+  };
+
+  const unskipFoundMailbox = async (item: FoundEmailDoc) => {
+    const ref = mailboxRef(item);
+    const skipped = (settings.mailboxSkipped ?? []).filter((key) => key !== ref);
+    setFoundEmail((rows) =>
+      rows.map((row) => (mailboxRef(row) === ref ? { ...row, skipped: false } : row)),
+    );
+    await persistSettings({ ...settings, mailboxSkipped: skipped });
+    setToast("Back on Add");
   };
 
   const closeMailboxPreview = () => {
@@ -1063,6 +1087,7 @@ export default function App() {
               onAddFound={addFromMailbox}
               onViewFound={(item) => void viewFromMailbox(item)}
               onSkipFound={(item) => void skipFoundMailbox(item)}
+              onUnskipFound={(item) => void unskipFoundMailbox(item)}
               gmailReady={gmailConnectAvailable()}
               outlookReady={outlookConnectAvailable()}
               gmailConnected={gmailHasSession() || settings.gmailConnected}
@@ -2926,6 +2951,7 @@ function InboxView({
   onAddFound,
   onViewFound,
   onSkipFound,
+  onUnskipFound,
   onAddMail,
   onConnectGmail,
   onConnectOutlook,
@@ -2950,6 +2976,7 @@ function InboxView({
   onAddFound: (item: FoundEmailDoc) => Promise<void>;
   onViewFound: (item: FoundEmailDoc) => void;
   onSkipFound: (item: FoundEmailDoc) => void;
+  onUnskipFound: (item: FoundEmailDoc) => void;
   onAddMail: (file: File) => void;
   onConnectGmail: () => void;
   onConnectOutlook: () => void;
@@ -2963,10 +2990,12 @@ function InboxView({
 }) {
   const pending = inbox.filter((i) => i.status === "pending");
   const convenience = settings.privacyMode === "inbox";
-  const [foundMailTab, setFoundMailTab] = useState<"add" | "added">("add");
-  const foundToAdd = foundEmail.filter((item) => !item.added);
+  const [foundMailTab, setFoundMailTab] = useState<"add" | "added" | "skipped">("add");
+  const foundToAdd = foundEmail.filter((item) => !item.added && !item.skipped);
   const foundAdded = foundEmail.filter((item) => item.added);
-  const foundShown = foundMailTab === "add" ? foundToAdd : foundAdded;
+  const foundSkipped = foundEmail.filter((item) => item.skipped && !item.added);
+  const foundShown =
+    foundMailTab === "add" ? foundToAdd : foundMailTab === "added" ? foundAdded : foundSkipped;
 
   useEffect(() => {
     if (foundToAdd.length > 0) setFoundMailTab("add");
@@ -3171,7 +3200,7 @@ function InboxView({
           <div className="found-email-list">
             <h3>From this look</h3>
             <p className="meta">
-              View a file before you file it. Add puts it in your index. Skip hides it from the next look.
+              View a file before you file it. Add puts it in your index. Skip keeps it here, off the next look.
             </p>
             <div className="switch found-email-tabs" role="tablist" aria-label="Found email documents">
               <button
@@ -3192,13 +3221,24 @@ function InboxView({
               >
                 Added {foundAdded.length}
               </button>
+              <button
+                type="button"
+                role="tab"
+                className={foundMailTab === "skipped" ? "active" : ""}
+                aria-selected={foundMailTab === "skipped"}
+                onClick={() => setFoundMailTab("skipped")}
+              >
+                Skipped {foundSkipped.length}
+              </button>
             </div>
             <div className="list" style={{ marginTop: 12 }}>
               {foundShown.length === 0 && (
                 <p className="meta">
                   {foundMailTab === "add"
-                    ? "Nothing new to add. Already-filed files are in Added."
-                    : "Nothing from this look is in your index yet."}
+                    ? "Nothing new to add. Already-filed files are in Added. Skipped files are in Skipped."
+                    : foundMailTab === "added"
+                      ? "Nothing from this look is in your index yet."
+                      : "Nothing skipped from this look."}
                 </p>
               )}
               {foundShown.map((item) => (
@@ -3218,7 +3258,9 @@ function InboxView({
                       {item.period ? ` · ${item.period}` : ""}
                     </p>
                   </button>
-                  {foundMailTab === "add" ? (
+                  {foundMailTab === "added" ? (
+                    <span className="found-email-done">In your index</span>
+                  ) : (
                     <div className="found-email-actions">
                       <button
                         className="secondary"
@@ -3235,17 +3277,32 @@ function InboxView({
                       >
                         Add
                       </button>
-                      <button
-                        className="secondary"
-                        type="button"
-                        disabled={confirmingId !== null}
-                        onClick={() => onSkipFound(item)}
-                      >
-                        Skip
-                      </button>
+                      {foundMailTab === "add" ? (
+                        <button
+                          className="secondary"
+                          type="button"
+                          disabled={confirmingId !== null}
+                          onClick={() => {
+                            onSkipFound(item);
+                            if (foundToAdd.length <= 1) setFoundMailTab("skipped");
+                          }}
+                        >
+                          Skip
+                        </button>
+                      ) : (
+                        <button
+                          className="secondary"
+                          type="button"
+                          disabled={confirmingId !== null}
+                          onClick={() => {
+                            onUnskipFound(item);
+                            setFoundMailTab("add");
+                          }}
+                        >
+                          Unskip
+                        </button>
+                      )}
                     </div>
-                  ) : (
-                    <span className="found-email-done">In your index</span>
                   )}
                 </div>
               ))}

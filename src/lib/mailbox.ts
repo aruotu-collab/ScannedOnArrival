@@ -22,7 +22,12 @@ export function rememberFoundEmail(
   skipped: string[],
 ): FoundEmailDoc[] {
   const skippedSet = new Set(skipped);
-  return items
-    .filter((item) => !skippedSet.has(mailboxRef(item)))
-    .map((item) => ({ ...item, added: isMailboxItemIndexed(item, documents) }));
+  return items.map((item) => {
+    const added = isMailboxItemIndexed(item, documents);
+    return {
+      ...item,
+      added,
+      skipped: !added && skippedSet.has(mailboxRef(item)),
+    };
+  });
 }

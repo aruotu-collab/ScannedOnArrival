@@ -104,6 +104,7 @@ export interface FoundEmailDoc {
   period?: string;
   mailbox: "gmail" | "outlook";
   added: boolean;
+  skipped?: boolean;
   from?: string;
   subject?: string;
   receivedAt?: string;
