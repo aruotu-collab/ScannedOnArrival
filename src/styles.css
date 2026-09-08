@@ -9,6 +9,7 @@
   --moss: #2f7a58;
   --gold: #c4a35a;
   --cream: #fffbf4;
+  --folder: #e6d5b4;
   --line: #ddd4c4;
   --alert: #b85c38;
   --warn: #c4892a;
@@ -1490,8 +1491,8 @@ button {
 }
 
 .doc-category-card {
-  background: var(--cream);
-  border: 1px solid var(--line);
+  background: var(--folder);
+  border: 1px solid #d4c4a4;
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   margin: 0 0 14px;
@@ -1502,7 +1503,7 @@ button {
 .doc-category-card.selected {
   border-color: var(--forest);
   outline: 2px solid var(--forest);
-  background: #f4efe2;
+  background: #eee3c8;
   box-shadow: 0 16px 36px rgba(27, 58, 47, 0.14);
 }
 
