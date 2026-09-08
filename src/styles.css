@@ -9,7 +9,7 @@
   --moss: #2f7a58;
   --gold: #c4a35a;
   --cream: #fffbf4;
-  --folder: #e6d5b4;
+  --folder: #eee4d2;
   --line: #ddd4c4;
   --alert: #b85c38;
   --warn: #c4892a;
@@ -57,6 +57,7 @@ textarea {
 
 button {
   cursor: pointer;
+  color: inherit;
 }
 
 .app {
@@ -1492,7 +1493,7 @@ button {
 
 .doc-category-card {
   background: var(--folder);
-  border: 1px solid #d4c4a4;
+  border: 1px solid var(--line);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   margin: 0 0 14px;
@@ -1503,7 +1504,7 @@ button {
 .doc-category-card.selected {
   border-color: var(--forest);
   outline: 2px solid var(--forest);
-  background: #eee3c8;
+  background: #f3ead9;
   box-shadow: 0 16px 36px rgba(27, 58, 47, 0.14);
 }
 
@@ -1528,6 +1529,7 @@ button {
   background: none;
   border: 0;
   padding: 0;
+  color: var(--ink);
 }
 
 .doc-category-copy {
@@ -1577,8 +1579,13 @@ button {
 
 .doc-category-card-head h2 {
   margin: 0;
+  color: var(--ink);
   font-size: 1.2rem;
   line-height: 1.15;
+}
+
+.doc-category-copy .meta {
+  color: var(--ink-soft);
 }
 
 .doc-category-title .badge {
