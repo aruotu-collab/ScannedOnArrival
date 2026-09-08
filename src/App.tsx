@@ -29,7 +29,7 @@ import {
   mintInboxAddress,
   withoutSampleInbox,
 } from "./lib/inbox";
-import { computeStatus, locationLine } from "./data/status";
+import { computeStatus, isSuperseded, locationLine } from "./data/status";
 import {
   blobLooksLikePdf,
   extractPdfText,
@@ -1440,22 +1440,23 @@ function HomeStatus({
   type StatusTab = "current" | "attention" | "missing";
   const [tab, setTab] = useState<StatusTab>(attention.length > 0 ? "attention" : "current");
   const [panelOpen, setPanelOpen] = useState(false);
-  const current = documents.filter((d) => d.isCurrent);
+  const currentByType = documents.filter((d) => d.isCurrent);
   const rows = allTypes().filter((t) => t.id !== "other").map((type) => {
-    const doc = current.find((d) => d.typeId === type.id);
+    const doc = currentByType.find((d) => d.typeId === type.id);
     const status = doc ? computeStatus(doc) : "missing";
     return { type, doc, status };
   });
-  const currentRows = rows
-    .filter((row) => row.doc && row.status === "current")
-    .map((row) => ({
-      key: row.doc!.id,
-      typeId: row.type.id,
-      documentId: row.doc!.id,
-      title: row.doc!.title,
-      typeLabel: row.type.label,
-      detail: locationLine(row.doc!),
-      badge: "Current",
+  const currentRows = documents
+    .filter((doc) => !isSuperseded(doc) && computeStatus(doc) === "current")
+    .sort((a, b) => Number(b.isCurrent) - Number(a.isCurrent) || b.createdAt.localeCompare(a.createdAt))
+    .map((doc) => ({
+      key: doc.id,
+      typeId: doc.typeId,
+      documentId: doc.id,
+      title: doc.title,
+      typeLabel: typeById(doc.typeId).label,
+      detail: locationLine(doc),
+      badge: doc.isCurrent ? "Current" : "Relevant",
       kind: "current" as const,
     }));
   const missingRows = rows
@@ -1487,7 +1488,7 @@ function HomeStatus({
     current: {
       title: "Current",
       count: ready === 1 ? "1 file" : `${ready} files`,
-      lead: "These copies are in date.",
+      lead: "These copies are in date — including extra copies that are still relevant.",
       empty: "No in-date copies yet.",
       rows: currentRows,
     },
@@ -1596,11 +1597,17 @@ function HomeStatus({
   );
 }
 
-function statusBadgeText(status: "current" | "outdated" | "expiring" | "missing") {
-  if (status === "current") return "Current";
+function statusBadgeText(status: "current" | "outdated" | "expiring" | "missing", doc?: DocumentRecord) {
+  if (status === "current") return doc && !doc.isCurrent ? "Relevant" : "Current";
   if (status === "expiring") return "Expiring";
   if (status === "missing") return "Missing";
   return "Outdated";
+}
+
+function documentRoleLabel(doc: DocumentRecord) {
+  if (doc.isCurrent) return "Latest document";
+  if (isSuperseded(doc)) return "Earlier copy";
+  return "Also relevant";
 }
 
 function copiesForType(documents: DocumentRecord[], typeId: string) {
@@ -1914,7 +1921,7 @@ function DocumentsView({
                           <div key={doc.id} className="doc-slide">
                             <DocumentDetail
                               doc={doc}
-                              previous={copies.filter((item) => item.id !== doc.id && !item.isCurrent)}
+                              previous={copies.filter((item) => item.id !== doc.id)}
                               compact
                               onDeleted={() => onDeleted(doc.id)}
                             />
@@ -2440,8 +2447,10 @@ function DocumentDetail({
   return (
     <aside className={`card doc-detail${doc.id === DEMO_DOC_ID ? " demo-doc" : ""}`}>
       <div className="doc-detail-top">
-        <p className="kicker">{doc.isCurrent ? "Latest document" : "Earlier copy"}</p>
-        <span className={`badge ${status}`}>{statusBadgeText(status)}</span>
+        <p className="kicker">{documentRoleLabel(doc)}</p>
+        <span className={`badge ${status === "current" && !doc.isCurrent ? "relevant" : status}`}>
+          {statusBadgeText(status, doc)}
+        </span>
       </div>
       <h2>{doc.title}</h2>
       <p className="meta">
@@ -2499,11 +2508,11 @@ function DocumentDetail({
           The file stays in its original folder. This app only keeps the listing.
         </div>
       )}
-      {!compact && previous.length > 0 && (
+      {!compact && previous.filter(isSuperseded).length > 0 && (
         <>
           <h3 style={{ marginTop: 18 }}>Previous versions</h3>
           <div className="list">
-            {previous.map((item) => (
+            {previous.filter(isSuperseded).map((item) => (
               <div key={item.id} className="meta">
                 {item.title} · {item.period ?? item.issuedOn ?? "earlier copy"}
               </div>
@@ -2636,7 +2645,8 @@ function TreeView({
                                   <span className="tree-dot leaf" aria-hidden="true" />
                                   <button type="button" className="tree-name file" onClick={() => onSelect(doc.id)}>
                                     <span className="tree-label">
-                                      {doc.period ?? doc.title} {doc.isCurrent ? "✅ Current" : ""}
+                                      {doc.period ?? doc.title}{" "}
+                                      {doc.isCurrent ? "✅ Current" : isSuperseded(doc) ? "" : "· Relevant"}
                                     </span>
                                     <span className="tree-loc">
                                       {doc.storageKind === "stored"
@@ -3555,7 +3565,7 @@ function AddDocumentModal({
             {draft.method === "email-forward" && documents.find((d) => d.typeId === draft.typeId && d.isCurrent && d.typeId !== "other") && (
               <div className="notice">
                 Setting this as current moves your older {typeById(draft.typeId).label} copy into Previous versions. Keep
-                as extra copy leaves that current version in place.
+                as another relevant copy leaves that current version in place, and this one stays in date.
               </div>
             )}
             {draft.classified && (
@@ -3791,7 +3801,7 @@ function AddDocumentModal({
               {draft.method === "email-forward" ? (
                 <>
                   <button className="secondary" onClick={() => void submit(false)} disabled={!draft.title}>
-                    Keep as extra copy
+                    Keep as another relevant copy
                   </button>
                   <button className="primary" onClick={continueFromForm} disabled={!draft.title}>
                     Set as current version
@@ -3810,12 +3820,13 @@ function AddDocumentModal({
           <>
             <h2>Newer {typeById(draft.typeId).label} document detected</h2>
             <p>
-              Your previous copy is {existing.period ?? existing.title}. Set this as the current version? The older
-              document is not deleted — it moves into Previous versions.
+              Your current copy is {existing.period ?? existing.title}. Set this as the current version, or keep it as
+              another relevant copy so both stay in date. A replaced copy is not deleted — it moves into Previous
+              versions.
             </p>
             <div className="row" style={{ marginTop: 16 }}>
               <button className="secondary" onClick={() => submit(false)}>
-                Keep as extra copy
+                Keep as another relevant copy
               </button>
               <button className="primary" onClick={() => submit(true)}>
                 Set as current version

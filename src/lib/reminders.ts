@@ -16,7 +16,7 @@ const NOTIFY_KEY = "soa-notify-day";
 
 export function listAttention(documents: DocumentRecord[]): AttentionItem[] {
   return documents
-    .filter((doc) => doc.isCurrent)
+    .filter((doc) => !doc.supersededBy)
     .map((doc) => {
       const status = computeStatus(doc);
       if (status !== "outdated" && status !== "expiring") return null;

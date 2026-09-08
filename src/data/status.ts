@@ -2,6 +2,10 @@ import type { DocumentRecord } from "../types";
 import { typeById } from "./taxonomy";
 import { monthsOld } from "./classify";
 
+export function isSuperseded(doc: DocumentRecord): boolean {
+  return Boolean(doc.supersededBy);
+}
+
 export function freshnessLabel(doc: DocumentRecord, now = new Date()): string {
   if (doc.expiresOn) {
     const expiry = new Date(doc.expiresOn);
@@ -20,7 +24,7 @@ export function freshnessLabel(doc: DocumentRecord, now = new Date()): string {
 }
 
 export function computeStatus(doc: DocumentRecord, now = new Date()): "current" | "outdated" | "expiring" {
-  if (!doc.isCurrent) return "outdated";
+  if (isSuperseded(doc)) return "outdated";
   if (doc.expiresOn) {
     const expiry = new Date(doc.expiresOn);
     if (!Number.isNaN(expiry.getTime())) {
@@ -31,6 +35,7 @@ export function computeStatus(doc: DocumentRecord, now = new Date()): "current" 
       return "current";
     }
   }
+  if (!doc.isCurrent) return "current";
   const def = typeById(doc.typeId);
   const age = monthsOld(doc.issuedOn ?? doc.lastChecked, now);
   if (def.freshnessMonths && age !== null && age > def.freshnessMonths) return "outdated";
