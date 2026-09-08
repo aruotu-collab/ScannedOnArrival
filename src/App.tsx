@@ -871,7 +871,8 @@ export default function App() {
               busyKind={inboxBusyKind}
               onAddMail={(file) => {
                 setPendingInboxItem(null);
-                setIncomingMethod(null);
+                setIntendedTypeId(null);
+                setIncomingMethod("email-forward");
                 setIncomingFile(file);
                 setAddStart("choose");
                 setAddOpen(true);
