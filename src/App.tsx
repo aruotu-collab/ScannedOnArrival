@@ -73,7 +73,8 @@ import {
 } from "./lib/pdf";
 import { extractImageText } from "./lib/ocr";
 import { consumeSharedFile, isDesktopLayout, isIos, isStandalone } from "./lib/pwa";
-import { buildBackup, downloadBackup, parseBackupFile, restoreBackup } from "./lib/backup";
+import { buildBackup, downloadBackup, fileLooksLikeBackup, parseBackupFile, restoreBackup } from "./lib/backup";
+import { canShareBackup, sendBackupToAnotherPhone } from "./lib/sync";
 import { enableNotifications, listAttention, maybeNotify, type AttentionItem } from "./lib/reminders";
 import { classifySmart } from "./lib/openai";
 import { flattenImageFile } from "./lib/detect";
@@ -347,8 +348,10 @@ export default function App() {
   const [inboxReady, setInboxReady] = useState(false);
   const [docQuery, setDocQuery] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [receiveHint, setReceiveHint] = useState(false);
   const [focusDocId, setFocusDocId] = useState<string | null>(null);
   const [personFilter, setPersonFilter] = useState<PersonFilterId>("all");
+  const incomingFileRef = useRef<(file: File) => Promise<void>>(async () => {});
 
   useEffect(() => {
     let alive = true;
@@ -428,23 +431,24 @@ export default function App() {
     const params = new URLSearchParams(window.location.search);
     const openScan = params.get("scan") === "1";
     const shared = params.get("shared") === "1";
+    const openRestore = params.get("restore") === "1";
 
     const consumeLaunch = async () => {
       if (shared) {
         const file = await consumeSharedFile();
-        if (file) {
-          setIncomingFile(file);
-          setAddStart("choose");
-          setAddOpen(true);
-        }
+        if (file) await incomingFileRef.current(file);
       } else if (openScan) {
         setAddStart("camera");
         setAddOpen(true);
+      } else if (openRestore) {
+        setView("settings");
+        setReceiveHint(true);
       }
-      if (openScan || shared) {
+      if (openScan || shared || openRestore) {
         const url = new URL(window.location.href);
         url.searchParams.delete("scan");
         url.searchParams.delete("shared");
+        url.searchParams.delete("restore");
         window.history.replaceState({}, "", `${url.pathname}${url.search}`);
       }
     };
@@ -456,8 +460,7 @@ export default function App() {
         void (async () => {
           const file = await params.files[0]?.getFile();
           if (!file) return;
-          setIncomingFile(file);
-          setAddOpen(true);
+          await incomingFileRef.current(file);
         })();
       });
     }
@@ -475,6 +478,53 @@ export default function App() {
     setSettings(safe);
     await saveSettings(safe);
   };
+
+  const restoreFromFile = async (file: File): Promise<boolean> => {
+    if (!window.confirm("Receive this index? It replaces everything on this browser.")) return false;
+    try {
+      const backup = await parseBackupFile(file);
+      const restored = await restoreBackup(backup, DEFAULT_SETTINGS);
+      const nextSettings = {
+        ...DEFAULT_SETTINGS,
+        ...restored.settings,
+        customCategories: restored.settings.customCategories ?? [],
+        customTypes: restored.settings.customTypes ?? [],
+        people: restored.settings.people ?? [],
+        mailboxSkipped: restored.settings.mailboxSkipped ?? [],
+        inboxAddress: ensureInboxAddress(restored.settings.inboxAddress),
+      };
+      setCatalogExtras(nextSettings.customCategories, nextSettings.customTypes);
+      setDocuments(restored.documents);
+      setSettings(nextSettings);
+      setInbox(withoutSampleInbox(restored.inbox));
+      if (nextSettings.inboxAddress !== restored.settings.inboxAddress) {
+        await persistSettings(nextSettings);
+      }
+      setFoundEmail([]);
+      setReceiveHint(false);
+      setToast(`Restored ${restored.documents.length} documents`);
+      return true;
+    } catch (err) {
+      setToast(err instanceof Error ? err.message : "Could not restore that backup.");
+      return false;
+    }
+  };
+
+  const openIncomingFile = async (file: File) => {
+    if (await fileLooksLikeBackup(file)) {
+      setView("settings");
+      await restoreFromFile(file);
+      return;
+    }
+    if (isImage(file) || isPdf(file) || (await blobLooksLikePdf(file))) {
+      setIncomingFile(file);
+      setAddStart("choose");
+      setAddOpen(true);
+      return;
+    }
+    setToast("Share a letter, a PDF, or a ScannedOnArrival backup.");
+  };
+  incomingFileRef.current = openIncomingFile;
 
   const openAdd = (start: "choose" | "camera", typeId?: string | null) => {
     setIncomingFile(null);
@@ -1176,7 +1226,7 @@ export default function App() {
               {(view === "documents" || view === "ready") && "Scan a letter, then tap a category. What’s current, missing, or overdue sits with the file."}
               {view === "tree" && "A filing-cabinet view. Move a file, add a folder, or filter by person. The files can live anywhere."}
               {view === "inbox" && "Letterbox or inbox: both are ways documents arrive. Email stays optional."}
-              {view === "settings" && "Keep the privacy story clear. Local by default, convenience only if you choose it."}
+              {view === "settings" && "The index stays on this phone. Send it to another when you change phones."}
             </p>
           </div>
         </header>
@@ -1340,41 +1390,32 @@ export default function App() {
               onCreatePerson={createPerson}
               onRemovePerson={removePerson}
               onToast={setToast}
+              receiveHint={receiveHint}
               onExport={async () => {
                 try {
                   const backup = await buildBackup(settings);
                   downloadBackup(backup);
-                  setToast("Backup downloaded to this device");
+                  setToast("Backup saved on this device. On the other phone, Receive it.");
                 } catch (err) {
                   setToast(err instanceof Error ? err.message : "Could not export the backup.");
                 }
               }}
-              onRestore={async (file) => {
-                if (!window.confirm("Restore this backup? It replaces the index on this browser.")) return;
+              onSend={async () => {
                 try {
-                  const backup = await parseBackupFile(file);
-                  const restored = await restoreBackup(backup, DEFAULT_SETTINGS);
-                  const nextSettings = {
-                    ...DEFAULT_SETTINGS,
-                    ...restored.settings,
-                    customCategories: restored.settings.customCategories ?? [],
-                    customTypes: restored.settings.customTypes ?? [],
-                    people: restored.settings.people ?? [],
-                    mailboxSkipped: restored.settings.mailboxSkipped ?? [],
-                    inboxAddress: ensureInboxAddress(restored.settings.inboxAddress),
-                  };
-                  setCatalogExtras(nextSettings.customCategories, nextSettings.customTypes);
-                  setDocuments(restored.documents);
-                  setSettings(nextSettings);
-                  setInbox(withoutSampleInbox(restored.inbox));
-                  if (nextSettings.inboxAddress !== restored.settings.inboxAddress) {
-                    await persistSettings(nextSettings);
+                  const backup = await buildBackup(settings);
+                  const result = await sendBackupToAnotherPhone(backup);
+                  if (result === "shared") {
+                    setToast("Choose AirDrop, Messages, or Files. On the other phone, Receive that file.");
+                  } else {
+                    setToast("Backup saved on this device. On the other phone, Receive it.");
                   }
-                  setFoundEmail([]);
-                  setToast(`Restored ${restored.documents.length} documents`);
                 } catch (err) {
-                  setToast(err instanceof Error ? err.message : "Could not restore that backup.");
+                  if (err instanceof Error && err.name === "AbortError") return;
+                  setToast(err instanceof Error ? err.message : "Could not send the index.");
                 }
+              }}
+              onRestore={async (file) => {
+                await restoreFromFile(file);
               }}
               onReset={async () => {
                 await clearAllData();
@@ -4361,6 +4402,41 @@ function InboxView({
   );
 }
 
+function RestoreHandoff() {
+  const [dataUrl, setDataUrl] = useState<string | null>(null);
+  const [visible, setVisible] = useState(() => isDesktopLayout());
+
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 861px)");
+    const sync = () => setVisible(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
+
+  useEffect(() => {
+    if (!visible) return;
+    const url = `${window.location.origin}/?restore=1`;
+    void import("qrcode").then((mod) => {
+      const QRCode = mod.default;
+      return QRCode.toDataURL(url, {
+        width: 140,
+        margin: 1,
+        color: { dark: "#1B3A2F", light: "#F3EEE4" },
+      }).then(setDataUrl);
+    });
+  }, [visible]);
+
+  if (!visible) return null;
+
+  return (
+    <div className="sync-qr">
+      {dataUrl ? <img src={dataUrl} alt="QR code that opens Receive on your phone" width={88} height={88} /> : null}
+      <p className="meta">On the other phone, open this, then Receive the file you sent.</p>
+    </div>
+  );
+}
+
 function SettingsView({
   settings,
   installPrompt,
@@ -4369,9 +4445,11 @@ function SettingsView({
   onCreatePerson,
   onRemovePerson,
   onExport,
+  onSend,
   onRestore,
   onReset,
   onToast,
+  receiveHint,
 }: {
   settings: AppSettings;
   installPrompt: BeforeInstallPromptEvent | null;
@@ -4380,9 +4458,11 @@ function SettingsView({
   onCreatePerson: (name: string) => Promise<HouseholdPerson>;
   onRemovePerson: (id: string) => Promise<void>;
   onExport: () => Promise<void>;
+  onSend: () => Promise<void>;
   onRestore: (file: File) => Promise<void>;
   onReset: () => Promise<void>;
   onToast: (msg: string) => void;
+  receiveHint: boolean;
 }) {
   const standalone = isStandalone();
   const ios = isIos();
@@ -4498,17 +4578,19 @@ function SettingsView({
         </label>
       </div>
       <div className="card">
-        <h2>Backup and restore</h2>
+        <h2>This phone and another</h2>
         <p className="meta">
-          The index lives in this browser. Download a backup before you change phones or clear site data, then
-          restore it here. The file stays on your device.
+          The index lives in this browser. There is no account yet, so phones do not stay in sync on their own.
+          Send this index to the other phone — AirDrop, Messages, or Files — then Receive it there. That replaces
+          the index on that phone.
         </p>
+        {receiveHint && <p className="sync-receive-note">Pick the backup you sent from the other phone.</p>}
         <div className="row" style={{ marginTop: 12 }}>
-          <button className="primary" onClick={() => void onExport()}>
-            Download backup
+          <button className={receiveHint ? "secondary" : "primary"} type="button" onClick={() => void onSend()}>
+            Send this index
           </button>
-          <label className="secondary" style={{ display: "inline-flex" }}>
-            Restore backup
+          <label className={receiveHint ? "primary" : "secondary"} style={{ display: "inline-flex" }}>
+            Receive on this phone
             <input
               type="file"
               accept="application/json,.json"
@@ -4521,6 +4603,14 @@ function SettingsView({
             />
           </label>
         </div>
+        {canShareBackup() && (
+          <div className="row" style={{ marginTop: 10 }}>
+            <button type="button" className="secondary" onClick={() => void onExport()}>
+              Download a copy
+            </button>
+          </div>
+        )}
+        <RestoreHandoff />
       </div>
       <div className="card">
         <h3>This device</h3>

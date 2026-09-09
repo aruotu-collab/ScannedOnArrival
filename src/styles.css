@@ -226,6 +226,35 @@ button {
   flex-shrink: 0;
 }
 
+.sync-receive-note {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #e8efe4;
+  color: var(--forest);
+  font-size: 0.86rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.sync-qr {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.sync-qr img {
+  width: 88px;
+  height: 88px;
+  border-radius: 10px;
+  flex-shrink: 0;
+}
+
+.sync-qr .meta {
+  margin: 0;
+}
+
 .install-banner .row {
   margin-top: 4px;
 }

@@ -52,7 +52,7 @@ export default defineConfig({
             files: [
               {
                 name: "files",
-                accept: ["application/pdf", "image/*"],
+                accept: ["application/pdf", "image/*", "application/json", ".json"],
               },
             ],
           },
@@ -65,6 +65,7 @@ export default defineConfig({
               "image/jpeg": [".jpg", ".jpeg"],
               "image/png": [".png"],
               "image/webp": [".webp"],
+              "application/json": [".json"],
             },
           },
         ],

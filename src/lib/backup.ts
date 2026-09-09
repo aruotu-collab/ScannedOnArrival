@@ -74,12 +74,36 @@ export function downloadBackup(backup: BackupFile): void {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+export function backupFileName(): string {
+  return `ScannedOnArrival-backup-${todayIso()}.json`;
+}
+
 export async function parseBackupFile(file: File): Promise<BackupFile> {
   const raw = JSON.parse(await file.text()) as BackupFile;
   if (raw.format !== FORMAT || !Array.isArray(raw.documents) || !Array.isArray(raw.files)) {
     throw new Error("That file is not a ScannedOnArrival backup.");
   }
   return raw;
+}
+
+export async function fileLooksLikeBackup(file: File): Promise<boolean> {
+  const name = file.name.toLowerCase();
+  const type = (file.type || "").toLowerCase();
+  const likely = type.includes("json") || name.endsWith(".json") || name.includes("scannedonarrival-backup");
+  if (!likely) {
+    try {
+      const head = (await file.slice(0, 96).text()).trimStart();
+      if (!head.startsWith("{")) return false;
+    } catch {
+      return false;
+    }
+  }
+  try {
+    await parseBackupFile(file);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export async function restoreBackup(backup: BackupFile, fallbackSettings: AppSettings): Promise<{
