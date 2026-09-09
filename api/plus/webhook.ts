@@ -1,6 +1,7 @@
 import {
   jsonResponse,
   plusUserIdFromCustomer,
+  stripeCancelScheduled,
   stripeGet,
   stripePeriodEndUnix,
   stripeWebhookSecret,
@@ -30,7 +31,7 @@ async function applySubscription(sub: StripeObject, fallbackUserId?: string): Pr
     subscriptionId: textId(sub.id) || textId(sub),
     status: typeof sub.status === "string" ? sub.status : "inactive",
     periodEnd: stripePeriodEndUnix(sub),
-    cancelAtPeriodEnd: sub.cancel_at_period_end === true,
+    cancelAtPeriodEnd: stripeCancelScheduled(sub),
   });
 }
 

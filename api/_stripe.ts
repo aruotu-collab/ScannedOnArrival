@@ -101,12 +101,18 @@ export function verifyStripeSignature(payload: string, header: string | null, se
 }
 
 export function stripePeriodEndUnix(sub: Record<string, unknown>): number | null {
-  if (typeof sub.current_period_end === "number") return sub.current_period_end;
   if (typeof sub.cancel_at === "number") return sub.cancel_at;
+  if (typeof sub.current_period_end === "number") return sub.current_period_end;
   const items = sub.items && typeof sub.items === "object" ? (sub.items as { data?: Array<Record<string, unknown>> }).data : undefined;
   const first = items?.[0];
   if (first && typeof first.current_period_end === "number") return first.current_period_end;
   return null;
+}
+
+export function stripeCancelScheduled(sub: Record<string, unknown> | null): boolean {
+  if (!sub) return false;
+  if (sub.cancel_at_period_end === true) return true;
+  return typeof sub.cancel_at === "number";
 }
 
 export async function upsertPlus(input: {

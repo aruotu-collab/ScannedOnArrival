@@ -533,9 +533,16 @@ export default function App() {
       loadPlusState()
         .then(setPlusState)
         .catch(() => setPlusState(empty));
+    const onVisible = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
     void refresh();
     window.addEventListener("focus", refresh);
-    return () => window.removeEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [hydrated, accountEmail]);
 
   useEffect(() => {
@@ -5279,7 +5286,11 @@ function AccountCard({
                       })();
                     }}
                   >
-                    {busy === "plus" ? "Opening billing…" : plusCancelLabel(plusState) || "Manage Plus"}
+                    {busy === "plus"
+                      ? "Opening billing…"
+                      : plusCancelLabel(plusState)
+                        ? `Manage Plus · ${plusCancelLabel(plusState)}`
+                        : "Manage Plus"}
                   </button>
                 </div>
               ) : !hasPlus ? (
