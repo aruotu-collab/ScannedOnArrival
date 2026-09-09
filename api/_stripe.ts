@@ -100,23 +100,39 @@ export function verifyStripeSignature(payload: string, header: string | null, se
   return got.length === want.length && timingSafeEqual(got, want);
 }
 
+export function stripePeriodEndUnix(sub: Record<string, unknown>): number | null {
+  if (typeof sub.current_period_end === "number") return sub.current_period_end;
+  if (typeof sub.cancel_at === "number") return sub.cancel_at;
+  const items = sub.items && typeof sub.items === "object" ? (sub.items as { data?: Array<Record<string, unknown>> }).data : undefined;
+  const first = items?.[0];
+  if (first && typeof first.current_period_end === "number") return first.current_period_end;
+  return null;
+}
+
 export async function upsertPlus(input: {
   userId: string;
   customerId?: string;
   subscriptionId?: string;
   status: string;
   periodEnd?: number | null;
+  cancelAtPeriodEnd?: boolean;
 }): Promise<void> {
   const supabase = serviceSupabase();
   if (!supabase) throw new Error("Plus billing cannot update the account.");
-  const { error } = await supabase.from("plus_subscribers").upsert({
+  const row: Record<string, unknown> = {
     user_id: input.userId,
     stripe_customer_id: input.customerId || null,
     stripe_subscription_id: input.subscriptionId || null,
     status: input.status,
     current_period_end: input.periodEnd ? new Date(input.periodEnd * 1000).toISOString() : null,
+    cancel_at_period_end: input.cancelAtPeriodEnd === true,
     updated_at: new Date().toISOString(),
-  });
+  };
+  let { error } = await supabase.from("plus_subscribers").upsert(row);
+  if (error && /cancel_at_period_end/.test(error.message)) {
+    delete row.cancel_at_period_end;
+    ({ error } = await supabase.from("plus_subscribers").upsert(row));
+  }
   if (error) throw error;
 }
 

@@ -92,8 +92,10 @@ import {
   loadPlusState,
   pageLimit,
   PLUS_PRICE_LABEL,
+  plusCancelLabel,
   plusEffective,
   plusPitch,
+  plusPlanLabel,
   rememberPlusIntent,
   seedTrackedTypes,
   startPlusCheckout,
@@ -520,9 +522,20 @@ export default function App() {
 
   useEffect(() => {
     if (!hydrated) return;
-    void loadPlusState()
-      .then(setPlusState)
-      .catch(() => setPlusState({ billingReady: false, active: false, subscriber: false }));
+    const empty = {
+      billingReady: false,
+      active: false,
+      subscriber: false,
+      cancelAtPeriodEnd: false,
+      currentPeriodEnd: null,
+    };
+    const refresh = () =>
+      loadPlusState()
+        .then(setPlusState)
+        .catch(() => setPlusState(empty));
+    void refresh();
+    window.addEventListener("focus", refresh);
+    return () => window.removeEventListener("focus", refresh);
   }, [hydrated, accountEmail]);
 
   useEffect(() => {
@@ -5105,6 +5118,7 @@ function AppNameplate({
   }, [open]);
 
   const hello = helloNameFromEmail(signedIn);
+  const plan = plusPlanLabel(plusState, Boolean(signedIn));
 
   return (
     <>
@@ -5124,11 +5138,16 @@ function AppNameplate({
           className={`account-menu-btn${hello ? " with-hello" : ""}`}
           aria-expanded={open}
           aria-controls="account-menu"
-          aria-label={hello ? `Hi ${hello}` : "Sign in"}
+          aria-label={hello ? `Hi ${hello}${plan ? `(${plan})` : ""}` : "Sign in"}
           onClick={() => setOpen((current) => !current)}
         >
           <MenuGlyph open={open} />
-          {hello ? <span className="account-hello">Hi {hello}</span> : null}
+          {hello ? (
+            <span className="account-hello">
+              Hi {hello}
+              {plan ? `(${plan})` : ""}
+            </span>
+          ) : null}
         </button>
       </div>
       {open && (
@@ -5239,28 +5258,30 @@ function AccountCard({
           {onStartPlus && plusState?.billingReady && !member && (
             <div className="row" style={{ marginTop: 12 }}>
               {hasPlus && plusState.subscriber ? (
-                <button
-                  type="button"
-                  className="secondary"
-                  disabled={busy !== null}
-                  onClick={() => {
-                    void (async () => {
-                      setBillingError(null);
-                      setBusy("plus");
-                      try {
-                        await startPlusPortal();
-                      } catch (err) {
-                        const message = err instanceof Error ? err.message : "Could not open Plus billing.";
-                        setBillingError(message);
-                        onToast(message);
-                      } finally {
-                        setBusy(null);
-                      }
-                    })();
-                  }}
-                >
-                  {busy === "plus" ? "Opening billing…" : "Manage Plus"}
-                </button>
+                <div>
+                  <button
+                    type="button"
+                    className="secondary plus-manage-btn"
+                    disabled={busy !== null}
+                    onClick={() => {
+                      void (async () => {
+                        setBillingError(null);
+                        setBusy("plus");
+                        try {
+                          await startPlusPortal();
+                        } catch (err) {
+                          const message = err instanceof Error ? err.message : "Could not open Plus billing.";
+                          setBillingError(message);
+                          onToast(message);
+                        } finally {
+                          setBusy(null);
+                        }
+                      })();
+                    }}
+                  >
+                    {busy === "plus" ? "Opening billing…" : plusCancelLabel(plusState) || "Manage Plus"}
+                  </button>
+                </div>
               ) : !hasPlus ? (
                 <button type="button" className="primary" disabled={busy !== null} onClick={onStartPlus}>
                   Plus · {PLUS_PRICE_LABEL}

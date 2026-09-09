@@ -137,7 +137,7 @@ button {
   flex-direction: column;
   width: auto;
   height: auto;
-  max-width: min(38vw, 132px);
+  max-width: min(52vw, 220px);
   gap: 1px;
   padding: 1px 0 0;
 }
@@ -229,6 +229,11 @@ button {
   box-shadow: var(--shadow);
   max-height: min(80vh, 640px);
   overflow: auto;
+}
+
+.plus-manage-btn {
+  white-space: normal;
+  line-height: 1.25;
 }
 
 .household-share {
@@ -2797,7 +2802,7 @@ html.nav-css[data-nav-dir="back"] .page-stage {
     flex-direction: column;
     width: auto;
     height: auto;
-    max-width: min(38vw, 132px);
+    max-width: min(52vw, 220px);
     gap: 1px;
     padding: 0 0 1px;
   }

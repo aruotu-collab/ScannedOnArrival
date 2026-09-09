@@ -2,6 +2,7 @@ import {
   jsonResponse,
   plusUserIdFromCustomer,
   stripeGet,
+  stripePeriodEndUnix,
   stripeWebhookSecret,
   upsertPlus,
   verifyStripeSignature,
@@ -23,13 +24,13 @@ async function applySubscription(sub: StripeObject, fallbackUserId?: string): Pr
     fallbackUserId ||
     (customerId ? await plusUserIdFromCustomer(customerId) : null);
   if (!userId) return;
-  const periodEnd = typeof sub.current_period_end === "number" ? sub.current_period_end : null;
   await upsertPlus({
     userId,
     customerId,
     subscriptionId: textId(sub.id) || textId(sub),
     status: typeof sub.status === "string" ? sub.status : "inactive",
-    periodEnd,
+    periodEnd: stripePeriodEndUnix(sub),
+    cancelAtPeriodEnd: sub.cancel_at_period_end === true,
   });
 }
 

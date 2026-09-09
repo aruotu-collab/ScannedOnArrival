@@ -12,9 +12,32 @@ export type PlusState = {
   billingReady: boolean
   active: boolean
   subscriber: boolean
+  cancelAtPeriodEnd: boolean
+  currentPeriodEnd: string | null
 };
 
 const PLUS_INTENT_KEY = "soa-plus-intent";
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sept", "Oct", "Nov", "Dec"];
+
+export function plusPlanLabel(state: PlusState | null, signedIn: boolean): "Paid" | "Free" | null {
+  if (!signedIn || !state?.billingReady) return null;
+  return plusEffective(state) ? "Paid" : "Free";
+}
+
+export function formatPlusDay(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  const day = date.getUTCDate();
+  const ord =
+    day % 10 === 1 && day !== 11 ? "st" : day % 10 === 2 && day !== 12 ? "nd" : day % 10 === 3 && day !== 13 ? "rd" : "th";
+  return `${day}${ord} ${MONTHS[date.getUTCMonth()]} ${String(date.getUTCFullYear()).slice(-2)}`;
+}
+
+export function plusCancelLabel(state: PlusState | null): string | null {
+  if (!state?.cancelAtPeriodEnd || !state.currentPeriodEnd) return null;
+  const day = formatPlusDay(state.currentPeriodEnd);
+  return day ? `cancels on ${day}` : null;
+}
 
 export function plusEffective(state: PlusState | null): boolean {
   if (!state) return true;
@@ -86,21 +109,52 @@ export async function loadPlusState(): Promise<PlusState> {
   const supabase = getSupabase();
   const session = await currentSession();
   if (!supabase || !session?.user) {
-    return { billingReady, active: false, subscriber: false };
+    return { billingReady, active: false, subscriber: false, cancelAtPeriodEnd: false, currentPeriodEnd: null };
   }
   try {
-    const [{ data: active }, { data: row }] = await Promise.all([
+    const [{ data: active }, rowResult] = await Promise.all([
       supabase.rpc("plus_active"),
-      supabase.from("plus_subscribers").select("status").eq("user_id", session.user.id).maybeSingle(),
+      supabase
+        .from("plus_subscribers")
+        .select("status, current_period_end, cancel_at_period_end")
+        .eq("user_id", session.user.id)
+        .maybeSingle(),
     ]);
+    let row: { status?: string; current_period_end?: string | null; cancel_at_period_end?: boolean | null } | null =
+      rowResult.data;
+    if (rowResult.error) {
+      const fallback = await supabase
+        .from("plus_subscribers")
+        .select("status, current_period_end")
+        .eq("user_id", session.user.id)
+        .maybeSingle();
+      row = fallback.data;
+    }
     const status = typeof row?.status === "string" ? row.status : "";
+    let currentPeriodEnd = typeof row?.current_period_end === "string" ? row.current_period_end : null;
+    let cancelAtPeriodEnd = row?.cancel_at_period_end === true;
+    try {
+      const live = await fetch("/api/plus/me", {
+        cache: "no-store",
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (live.ok) {
+        const body = (await live.json()) as { currentPeriodEnd?: string | null; cancelAtPeriodEnd?: boolean };
+        if (typeof body.currentPeriodEnd === "string") currentPeriodEnd = body.currentPeriodEnd;
+        if (typeof body.cancelAtPeriodEnd === "boolean") cancelAtPeriodEnd = body.cancelAtPeriodEnd;
+      }
+    } catch {
+      /* keep row values */
+    }
     return {
       billingReady,
       active: active === true,
       subscriber: status === "active" || status === "trialing",
+      cancelAtPeriodEnd,
+      currentPeriodEnd,
     };
   } catch {
-    return { billingReady, active: false, subscriber: false };
+    return { billingReady, active: false, subscriber: false, cancelAtPeriodEnd: false, currentPeriodEnd: null };
   }
 }
 
