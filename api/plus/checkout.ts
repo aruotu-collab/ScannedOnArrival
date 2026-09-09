@@ -26,6 +26,7 @@ export async function POST(request: Request): Promise<Response> {
   params.set("line_items[0][quantity]", "1");
   params.set("line_items[0][price_data][currency]", "usd");
   params.set("line_items[0][price_data][unit_amount]", String(PLUS_UNIT_AMOUNT));
+  params.set("line_items[0][price_data][tax_behavior]", "inclusive");
   params.set("line_items[0][price_data][recurring][interval]", "month");
   params.set("line_items[0][price_data][product_data][name]", PLUS_PRODUCT_NAME);
   params.set("line_items[0][price_data][product_data][tax_code]", PLUS_TAX_CODE);
