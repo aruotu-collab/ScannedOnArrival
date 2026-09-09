@@ -4915,8 +4915,8 @@ function AccountCard({
           </p>
           {onShareWithDevices && (
             <div className="share-devices">
-              <p className="meta">Other devices</p>
-              <div className="switch" role="group" aria-label="Let other devices copy this index">
+              <p className="meta">Sync to Other devices</p>
+              <div className="switch" role="group" aria-label="Sync to Other devices">
                 <button
                   type="button"
                   className={shareWithDevices ? "active" : ""}
