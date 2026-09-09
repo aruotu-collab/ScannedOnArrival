@@ -21,7 +21,7 @@
   --radius: 18px;
   --font-ui: "Plus Jakarta Sans", system-ui, sans-serif;
   --font-display: "Fraunces", Georgia, serif;
-  --nameplate-offset: calc(29px + env(safe-area-inset-top, 0px) + 16px);
+  --nameplate-offset: calc(52px + env(safe-area-inset-top, 0px) + 16px);
   --tabbar-offset: 0px;
   --category-peek: 72px;
 }
@@ -75,7 +75,7 @@ button {
   grid-template-rows: auto 1fr;
   max-width: 100%;
   overflow-x: clip;
-  padding-top: calc(29px + env(safe-area-inset-top, 0px));
+  padding-top: calc(52px + env(safe-area-inset-top, 0px));
 }
 
 .app-nameplate {
@@ -88,16 +88,16 @@ button {
   transform: translateZ(0);
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   margin: 0;
-  padding: 6px 12px;
-  padding-top: max(6px, env(safe-area-inset-top, 0px));
+  padding: 8px 16px;
+  padding-top: max(8px, env(safe-area-inset-top, 0px));
   border: 0;
   background: var(--forest);
   box-shadow: 0 3px 0 var(--forest);
   color: #cfc4ae;
   font-family: var(--font-display);
-  font-size: 0.78rem;
+  font-size: 1rem;
   font-weight: 560;
   letter-spacing: 0.06em;
   line-height: 1.2;
@@ -105,8 +105,8 @@ button {
 }
 
 .app-nameplate .scan-cta-glyph {
-  width: 14px;
-  height: 14px;
+  width: 20px;
+  height: 20px;
   flex-shrink: 0;
   color: inherit;
 }
@@ -123,8 +123,8 @@ button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 36px;
+  height: 36px;
   margin: 0 -4px 0 auto;
   padding: 0;
   border: 0;
@@ -134,12 +134,12 @@ button {
 }
 
 .account-menu-btn.with-hello {
-  flex-direction: column;
+  flex-direction: row;
   width: auto;
-  height: auto;
-  max-width: min(38vw, 132px);
-  gap: 1px;
-  padding: 1px 0 0;
+  height: 36px;
+  max-width: min(42vw, 240px);
+  gap: 8px;
+  padding: 0 10px 0 6px;
 }
 
 .account-hello {
@@ -148,11 +148,11 @@ button {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: var(--font-ui);
-  font-size: 0.5rem;
-  font-weight: 600;
+  font-size: 0.82rem;
+  font-weight: 650;
   line-height: 1.15;
   letter-spacing: 0;
-  text-align: center;
+  text-align: left;
   color: #f4efe4;
 }
 
@@ -163,8 +163,8 @@ button {
 
 .account-menu-glyph {
   display: block;
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
 }
 
 .account-menu-back {
@@ -232,6 +232,15 @@ button {
   color: #d7c7a1;
   font-size: 0.78rem;
   line-height: 1.4;
+}
+
+.sidebar-hello {
+  margin: 2px 0 0;
+  font-family: var(--font-ui);
+  font-size: 1rem;
+  font-weight: 650;
+  letter-spacing: 0;
+  color: #fffbf4;
 }
 
 .product-badge {
@@ -2085,6 +2094,15 @@ html.nav-css[data-nav-dir="back"] .page-stage {
   overscroll-behavior-x: contain;
 }
 
+.doc-rail.swipeable {
+  cursor: grab;
+}
+
+.doc-rail.dragging {
+  cursor: grabbing;
+  scroll-snap-type: none;
+}
+
 .doc-slide {
   min-width: min(100%, 340px);
   flex: 0 0 min(100%, 340px);
@@ -2711,11 +2729,17 @@ html.nav-css[data-nav-dir="back"] .page-stage {
   }
 
   .account-menu-btn.with-hello {
+    flex-direction: column;
+    width: auto;
+    height: auto;
+    max-width: min(38vw, 132px);
+    gap: 1px;
     padding: 0 0 1px;
   }
 
   .account-hello {
     font-size: 0.55rem;
+    text-align: center;
   }
 
   .account-menu-glyph {

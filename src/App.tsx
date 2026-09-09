@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode } from "react";
 import { createPortal, flushSync } from "react-dom";
 import type {
   AddDraft,
@@ -1320,6 +1320,8 @@ export default function App() {
     );
   }
 
+  const accountHello = helloNameFromEmail(accountEmail);
+
   return (
     <div className={`app${view === "demo" || demoLanding ? " demo-mode" : ""}`}>
       <AppNameplate onToast={setToast} />
@@ -1327,6 +1329,7 @@ export default function App() {
         <div className="wordmark">
           <ProductBadge tone="dark" />
           <strong>ScannedOnArrival</strong>
+          {accountHello ? <p className="sidebar-hello">Hi {accountHello}</p> : null}
           <span>What you have, how current it is, and where it lives.</span>
         </div>
         <nav className="nav">
@@ -2291,6 +2294,96 @@ function documentsScroller() {
   return document.scrollingElement ?? document.documentElement;
 }
 
+function useSwipeScroll<T extends HTMLElement>() {
+  const ref = useRef<T | null>(null);
+  const drag = useRef<{ id: number; x: number; left: number; moved: boolean } | null>(null);
+  const suppressClick = useRef(false);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const onWheel = (event: WheelEvent) => {
+      const delta =
+        Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.shiftKey ? event.deltaY : 0;
+      if (!delta) return;
+      const max = el.scrollWidth - el.clientWidth;
+      if (max <= 1) return;
+      const next = Math.max(0, Math.min(max, el.scrollLeft + delta));
+      if (next === el.scrollLeft) return;
+      event.preventDefault();
+      el.scrollLeft = next;
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+
+  const onPointerDown = (event: PointerEvent<T>) => {
+    const el = ref.current;
+    if (!el || event.pointerType === "touch") return;
+    if (el.scrollWidth <= el.clientWidth + 1) return;
+    drag.current = { id: event.pointerId, x: event.clientX, left: el.scrollLeft, moved: false };
+  };
+
+  const onPointerMove = (event: PointerEvent<T>) => {
+    const el = ref.current;
+    const current = drag.current;
+    if (!el || !current || current.id !== event.pointerId) return;
+    const dx = event.clientX - current.x;
+    if (!current.moved) {
+      if (Math.abs(dx) < 8) return;
+      current.moved = true;
+      try {
+        event.currentTarget.setPointerCapture(event.pointerId);
+      } catch {
+        /* capture is optional */
+      }
+      el.classList.add("dragging");
+    }
+    event.preventDefault();
+    el.scrollLeft = current.left - dx;
+  };
+
+  const endDrag = (event: PointerEvent<T>) => {
+    const current = drag.current;
+    if (!current || current.id !== event.pointerId) return;
+    suppressClick.current = current.moved;
+    drag.current = null;
+    ref.current?.classList.remove("dragging");
+    try {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    } catch {
+      /* capture may already be gone */
+    }
+  };
+
+  const onClickCapture = (event: MouseEvent<T>) => {
+    if (!suppressClick.current) return;
+    suppressClick.current = false;
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
+  return {
+    ref,
+    railProps: {
+      onPointerDown,
+      onPointerMove,
+      onPointerUp: endDrag,
+      onPointerCancel: endDrag,
+      onClickCapture,
+    },
+  };
+}
+
+function DocCopyRail({ label, children }: { label: string; children: ReactNode }) {
+  const { ref, railProps } = useSwipeScroll<HTMLDivElement>();
+  return (
+    <div ref={ref} className="doc-rail swipeable" aria-label={label} {...railProps}>
+      {children}
+    </div>
+  );
+}
+
 function syncNameplateOffset() {
   const plate = document.querySelector(".app-nameplate");
   const bottom = plate instanceof HTMLElement ? plate.getBoundingClientRect().bottom : 0;
@@ -2901,7 +2994,7 @@ function DocumentsView({
                     />
                     {copies.length === 0 && <p className="meta doc-type-empty">Nothing saved here yet. Scan into this type.</p>}
                     {current && (
-                      <div className="doc-rail" aria-label={`${activeType.label} copies`}>
+                      <DocCopyRail label={`${activeType.label} copies`}>
                         {copies.map((doc) => (
                           <div key={doc.id} id={`doc-${doc.id}`} className="doc-slide">
                             <DocumentDetail
@@ -2917,7 +3010,7 @@ function DocumentsView({
                             />
                           </div>
                         ))}
-                      </div>
+                      </DocCopyRail>
                     )}
                   </div>
                 </div>
@@ -2993,6 +3086,7 @@ function FileViewer({
   const movedRef = useRef(false);
   const pinchedRef = useRef(false);
   const lastTapRef = useRef<{ t: number; x: number; y: number } | null>(null);
+  const wheelPageAcc = useRef(0);
   const page = pages[index];
   const zoomed = view.scale > 1.02;
 
@@ -3032,9 +3126,9 @@ function FileViewer({
     const el = bodyRef.current;
     if (!el || !page?.image) return;
     const onWheel = (event: WheelEvent) => {
-      event.preventDefault();
       const current = viewRef.current;
       if (event.ctrlKey || event.metaKey) {
+        event.preventDefault();
         const rect = el.getBoundingClientRect();
         applyView(
           zoomViewerAround(
@@ -3045,11 +3139,21 @@ function FileViewer({
         );
         return;
       }
+      if (pages.length > 1 && current.scale <= 1.02 && Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
+        event.preventDefault();
+        wheelPageAcc.current += event.deltaX;
+        if (Math.abs(wheelPageAcc.current) < 48) return;
+        const dir = wheelPageAcc.current > 0 ? 1 : -1;
+        wheelPageAcc.current = 0;
+        goTo(index + dir);
+        return;
+      }
+      event.preventDefault();
       applyView({ ...current, y: current.y - event.deltaY, x: current.x - event.deltaX });
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-  }, [page?.image]);
+  }, [index, page?.image, pages.length]);
 
   const pointerList = () => [...pointersRef.current.values()];
 
@@ -3280,12 +3384,38 @@ function PageRail({
   const swipeStart = useRef<{ x: number; y: number; page: number } | null>(null);
   const swipeAxis = useRef<"x" | "y" | null>(null);
   const swiped = useRef(false);
+  const railRef = useRef<HTMLDivElement>(null);
+  const wheelAcc = useRef(0);
   const [dragX, setDragX] = useState(0);
   const [dragging, setDragging] = useState(false);
 
   const goTo = (next: number) => {
     setIndex(Math.max(0, Math.min(pages.length - 1, next)));
   };
+
+  useEffect(() => {
+    const el = railRef.current;
+    if (!el || pages.length < 2) return;
+    let timer = 0;
+    const onWheel = (event: WheelEvent) => {
+      if (Math.abs(event.deltaX) <= Math.abs(event.deltaY)) return;
+      event.preventDefault();
+      wheelAcc.current += event.deltaX;
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        wheelAcc.current = 0;
+      }, 120);
+      if (Math.abs(wheelAcc.current) < 48) return;
+      const dir = wheelAcc.current > 0 ? 1 : -1;
+      wheelAcc.current = 0;
+      goTo(index + dir);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+      window.clearTimeout(timer);
+    };
+  }, [index, pages.length]);
 
   const endDrag = (event: PointerEvent<HTMLDivElement>) => {
     const start = swipeStart.current;
@@ -3307,6 +3437,7 @@ function PageRail({
   return (
     <div className={`page-rail-wrap${demo ? " demo" : ""}`}>
       <div
+        ref={railRef}
         className={`page-rail ${pages.length > 1 ? "swipeable" : ""}`}
         aria-label="Document pages"
         onPointerDown={(event) => {
