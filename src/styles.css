@@ -2575,8 +2575,15 @@ html.nav-css[data-nav-dir="back"] .page-stage {
   }
 
   .doc-category-card,
-  .doc-type-card {
+  .doc-type-card,
+  .doc-category-card.selected {
     scroll-margin-top: var(--nameplate-offset);
+  }
+
+  .doc-category-card.peek-prev,
+  .doc-category-card.peek-next {
+    position: static;
+    z-index: auto;
   }
 
   .toast {
