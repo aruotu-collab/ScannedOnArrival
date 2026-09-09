@@ -74,7 +74,7 @@ export function AdminScreen() {
 
           <section className="card admin-card">
             <h2>Members</h2>
-            <p className="meta">Every signed-in email, with Plus or Free.</p>
+            <p className="meta">One row per email. The same address on a phone and a computer is one account.</p>
             <div className="admin-table-wrap">
               <table className="admin-table">
                 <thead>
@@ -115,7 +115,7 @@ export function AdminScreen() {
 
           <section className="card admin-card">
             <h2>Non-members by IP</h2>
-            <p className="meta">People who used the site without signing in.</p>
+            <p className="meta">People who used the site without signing in. An IP is dropped from here once that device signs in.</p>
             <div className="admin-table-wrap">
               <table className="admin-table">
                 <thead>

@@ -389,6 +389,7 @@ export default function App() {
   } | null>(null);
   const mailboxFiles = useRef(new Map<string, File>());
   const [accountEmail, setAccountEmail] = useState("");
+  const [authReady, setAuthReady] = useState(() => !getSupabase());
   const accountEmailRef = useRef("");
   const skipCloudRef = useRef(false);
   const cloudBusyRef = useRef(false);
@@ -505,22 +506,47 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!getSupabase()) return;
+    const supabase = getSupabase();
+    if (!supabase) {
+      setAuthReady(true);
+      return;
+    }
     const url = new URL(window.location.href);
     const error = url.searchParams.get("error_description") || url.searchParams.get("error");
     if (error) {
       setToast(error.replace(/\+/g, " "));
       stripAuthParamsFromUrl();
     }
-    return onAuthChange((user) => {
+    let alive = true;
+    const readyTimer = window.setTimeout(() => {
+      if (alive) setAuthReady(true);
+    }, 4000);
+    void supabase.auth
+      .getSession()
+      .then(({ data }) => {
+        if (!alive) return;
+        const email = userEmail(data.session?.user ?? null);
+        accountEmailRef.current = email;
+        setAccountEmail(email);
+      })
+      .finally(() => {
+        window.clearTimeout(readyTimer);
+        if (alive) setAuthReady(true);
+      });
+    const stop = onAuthChange((user) => {
       const email = userEmail(user);
       accountEmailRef.current = email;
       setAccountEmail(email);
+      setAuthReady(true);
       if (url.searchParams.has("code") && user) {
-        setToast("Signed in. This index follows this email.");
+        setToast("Signed in. Same email, same account on every device.");
         stripAuthParamsFromUrl();
       }
     });
+    return () => {
+      alive = false;
+      stop();
+    };
   }, []);
 
   useEffect(() => {
@@ -696,9 +722,15 @@ export default function App() {
         await saveSettings(result.settings);
         skipCloudRef.current = false;
       }
-      if (reason === "pull" && result.imported) setToast("Index updated from this account");
+      if (accountEmailRef.current && !settingsRef.current.onboardingComplete) {
+        await persistSettings({ ...settingsRef.current, onboardingComplete: true });
+      }
+      if (reason === "pull" && result.imported) setToast("Opened this account on this device");
     } catch (err) {
       skipCloudRef.current = false;
+      if (accountEmailRef.current && !settingsRef.current.onboardingComplete) {
+        await persistSettings({ ...settingsRef.current, onboardingComplete: true });
+      }
       if (isCloudSchemaError(err)) return;
       if (reason !== "push") setToast(err instanceof Error ? err.message : "Could not sync this index.");
     } finally {
@@ -737,8 +769,8 @@ export default function App() {
       if (enabled) void runAccountSyncRef.current("pull");
       setToast(
         enabled
-          ? "Other devices that sign in with this email can copy this index."
-          : "Other devices that sign in with this email will not copy this index.",
+          ? "This email stays one account. Other devices will keep the same index."
+          : "This email is still one account. Other devices will not keep copying later changes.",
       );
     } catch (err) {
       setShareWithDevices(previous);
@@ -1474,7 +1506,7 @@ export default function App() {
     }
   };
 
-  if (!hydrated) {
+  if (!hydrated || !authReady) {
     return (
       <>
         <div className="onboarding">
@@ -1482,6 +1514,25 @@ export default function App() {
             <ProductBadge />
             <p className="kicker">ScannedOnArrival</p>
             <h1>Opening your document index…</h1>
+          </div>
+        </div>
+        {toast && <div className="toast">{toast}</div>}
+      </>
+    );
+  }
+
+  if (accountEmail && !settings.onboardingComplete) {
+    return (
+      <>
+        <div className="onboarding">
+          <div className="onboarding-card">
+            <ProductBadge />
+            <p className="kicker">ScannedOnArrival</p>
+            <h1>Opening this account…</h1>
+            <p>
+              {accountEmail} is one account. This phone or computer is opening that same index — not a new
+              signup.
+            </p>
           </div>
         </div>
         {toast && <div className="toast">{toast}</div>}
@@ -1528,7 +1579,7 @@ export default function App() {
             </div>
             <AccountCard
               onToast={setToast}
-              intro="Already using this on another phone or computer? Sign in free so that index follows this email."
+              intro="Already using this email on another phone or computer? Sign in — that is the same account, not a new signup."
               onHouseholdChanged={() => void runAccountSyncRef.current("pull")}
               plusState={plusState}
               hasPlus={hasPlus}
@@ -1619,7 +1670,7 @@ export default function App() {
               {(view === "documents" || view === "ready") && "Scan a letter, then tap a category. What’s current, missing, or overdue sits with the file."}
               {view === "tree" && "A filing-cabinet view. Move a file, add a folder, or filter by person. The files can live anywhere."}
               {view === "inbox" && "Letterbox or inbox: both are ways documents arrive. Email stays optional."}
-              {view === "settings" && "Sign in so another phone can share this index, or send a file."}
+              {view === "settings" && "The same email is one account on every phone and computer."}
               {view === "admin" && "Members, paid and free accounts, and who visited — by IP if they are not signed in."}
             </p>
           </div>
@@ -5303,8 +5354,8 @@ function AccountCard({
             {member
               ? `Signed in as ${signedIn}. You share this index with ${ownerEmail || "the household"}. Papers you add here show up for them too. Inbox and Gmail stay on this device.`
               : hasPlus
-                ? `Signed in as ${signedIn} with Plus. When sharing is on, another phone or computer that signs in with this email copies the listings and stored scans. Invite one other person to this household.`
-                : `Signed in as ${signedIn}. Free accounts remember three important documents on this email. Plus is ${PLUS_PRICE_LABEL} for the rest — and for one other person, inbox, and Gmail.`}
+                ? `Signed in as ${signedIn} with Plus. This email is one account. Another phone or computer that signs in here opens the same index. Invite one other person to this household.`
+                : `Signed in as ${signedIn}. This email is one account on every device. Free accounts remember three important documents. Plus is ${PLUS_PRICE_LABEL} for the rest — and for one other person, inbox, and Gmail.`}
           </p>
           {onStartPlus && plusState?.billingReady && !member && (
             <div className="row" style={{ marginTop: 12 }}>
@@ -5597,7 +5648,7 @@ function AccountCard({
             {pendingInviteCode()
               ? "Sign in with your email, then type the household code to join their index."
               : intro ??
-                "We email a sign-in link. No password. On a Home Screen app, type the code from that same email if the link opens in the wrong browser."}
+                "We email a sign-in link. No password. The same email is one account — signing in on another device does not create a second one. On a Home Screen app, type the code from that same email if the link opens in the wrong browser."}
           </p>
           <label className="field" style={{ marginTop: 12 }}>
             <span>Email</span>

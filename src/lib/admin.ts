@@ -1,9 +1,9 @@
-import { currentSession } from "./auth";
+import { currentSession, normalizeAccountEmail } from "./auth";
 
 export const ADMIN_EMAIL = "aruotu@gmail.com";
 
 export function isAdminEmail(email: string): boolean {
-  return email.trim().toLowerCase() === ADMIN_EMAIL;
+  return normalizeAccountEmail(email) === ADMIN_EMAIL;
 }
 
 export type AdminMember = {

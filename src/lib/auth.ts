@@ -37,11 +37,25 @@ export function authRedirectTo(): string {
   return `${window.location.origin}${path}${suffix}`;
 }
 
+export function normalizeAccountEmail(raw: string): string {
+  const trimmed = raw.trim().toLowerCase();
+  const at = trimmed.lastIndexOf("@");
+  if (at <= 0) return trimmed;
+  let local = trimmed.slice(0, at);
+  const domain = trimmed.slice(at + 1);
+  if (domain === "gmail.com" || domain === "googlemail.com") {
+    const plus = local.indexOf("+");
+    if (plus >= 0) local = local.slice(0, plus);
+    return `${local.replace(/\./g, "")}@gmail.com`;
+  }
+  return trimmed;
+}
+
 export async function sendMagicLink(email: string): Promise<void> {
   const supabase = getSupabase();
   if (!supabase) throw new Error("Sign-in is not set up on this site yet.");
   const { error } = await supabase.auth.signInWithOtp({
-    email: email.trim().toLowerCase(),
+    email: normalizeAccountEmail(email),
     options: {
       emailRedirectTo: authRedirectTo(),
       shouldCreateUser: true,
@@ -54,7 +68,7 @@ export async function verifyEmailCode(email: string, token: string): Promise<voi
   const supabase = getSupabase();
   if (!supabase) throw new Error("Sign-in is not set up on this site yet.");
   const { error } = await supabase.auth.verifyOtp({
-    email: email.trim().toLowerCase(),
+    email: normalizeAccountEmail(email),
     token: token.trim(),
     type: "email",
   });
@@ -85,7 +99,7 @@ export function onAuthChange(callback: (user: User | null) => void): () => void 
 }
 
 export function userEmail(user: User | null): string {
-  return user?.email?.trim() || "";
+  return normalizeAccountEmail(user?.email?.trim() || "");
 }
 
 export function helloNameFromEmail(email: string): string {

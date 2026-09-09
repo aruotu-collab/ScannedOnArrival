@@ -1,5 +1,5 @@
 import { serviceSupabase } from "../_stripe.js";
-import { jsonResponse, requireAdmin } from "../_admin.js";
+import { accountEmailKey, jsonResponse, requireAdmin } from "../_admin.js";
 
 type VisitRow = {
   id: string
@@ -60,31 +60,74 @@ export async function GET(request: Request): Promise<Response> {
   const plusByUser = new Map(plusRows.map((row) => [row.user_id, row]));
   const lastByEmail = new Map<string, VisitRow>();
   const lastByIp = new Map<string, VisitRow>();
+  const signedIps = new Set<string>();
+  for (const visit of visits) {
+    const email = accountEmailKey(visit.email);
+    if (email && !lastByEmail.has(email)) lastByEmail.set(email, visit);
+    if (email && visit.ip) signedIps.add(visit.ip);
+    if (!lastByIp.has(visit.ip)) lastByIp.set(visit.ip, visit);
+  }
   const guestCounts = new Map<string, number>();
   for (const visit of visits) {
-    if (visit.email && !lastByEmail.has(visit.email)) lastByEmail.set(visit.email, visit);
-    if (!lastByIp.has(visit.ip)) lastByIp.set(visit.ip, visit);
-    if (!visit.email) guestCounts.set(visit.ip, (guestCounts.get(visit.ip) ?? 0) + 1);
+    if (visit.email || signedIps.has(visit.ip)) continue;
+    guestCounts.set(visit.ip, (guestCounts.get(visit.ip) ?? 0) + 1);
   }
 
-  const membersList = (usersData.users ?? []).map((user) => {
-    const email = user.email?.trim().toLowerCase() || "";
+  type MemberRow = {
+    id: string;
+    email: string;
+    createdAt: string | null;
+    lastSignInAt: string | null;
+    plan: "Paid" | "Free";
+    plusStatus: string;
+    cancelAtPeriodEnd: boolean;
+    currentPeriodEnd: string | null;
+    lastSeenAt: string | null;
+    lastPath: string | null;
+  };
+  const membersByEmail = new Map<string, MemberRow>();
+  for (const user of usersData.users ?? []) {
+    const email = accountEmailKey(user.email);
+    if (!email) continue;
     const plus = plusByUser.get(user.id);
-    const paid = plus?.status === "active" || plus?.status === "trialing";
-    const last = email ? lastByEmail.get(email) : undefined;
-    return {
+    const paidMember = plus?.status === "active" || plus?.status === "trialing";
+    const last = lastByEmail.get(email);
+    const row: MemberRow = {
       id: user.id,
       email,
       createdAt: user.created_at ?? null,
       lastSignInAt: user.last_sign_in_at ?? null,
-      plan: paid ? "Paid" : "Free",
+      plan: paidMember ? "Paid" : "Free",
       plusStatus: plus?.status || "none",
       cancelAtPeriodEnd: plus?.cancel_at_period_end === true,
       currentPeriodEnd: plus?.current_period_end ?? null,
       lastSeenAt: last?.created_at ?? null,
       lastPath: last?.path ?? null,
     };
-  });
+    const existing = membersByEmail.get(email);
+    if (!existing) {
+      membersByEmail.set(email, row);
+      continue;
+    }
+    const keepPaid = existing.plan === "Paid" ? existing : paidMember ? row : existing;
+    const newerSeen =
+      row.lastSeenAt && (!existing.lastSeenAt || row.lastSeenAt > existing.lastSeenAt) ? row : existing;
+    const newerSignIn =
+      row.lastSignInAt && (!existing.lastSignInAt || row.lastSignInAt > existing.lastSignInAt) ? row : existing;
+    const olderCreated =
+      row.createdAt && (!existing.createdAt || row.createdAt < existing.createdAt) ? row : existing;
+    membersByEmail.set(email, {
+      ...keepPaid,
+      email,
+      createdAt: olderCreated.createdAt,
+      lastSignInAt: newerSignIn.lastSignInAt,
+      lastSeenAt: newerSeen.lastSeenAt,
+      lastPath: newerSeen.lastPath,
+    });
+  }
+  const membersList = [...membersByEmail.values()].sort((a, b) =>
+    (b.lastSeenAt || b.lastSignInAt || "").localeCompare(a.lastSeenAt || a.lastSignInAt || ""),
+  );
   const paid = membersList.filter((row) => row.plan === "Paid").length;
   const today = startOfUtcDay();
   const todayVisits = visits.filter((visit) => visit.created_at >= today);

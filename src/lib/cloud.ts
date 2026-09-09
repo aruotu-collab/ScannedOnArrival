@@ -271,7 +271,8 @@ export async function applyAccountIndex(
   const local = await localCloudPayload(localSettings, localDocuments);
   const remote = await loadCloudIndex();
   const householdMember = userId !== ownerId;
-  if (!householdMember && remote && remote.settings.shareWithDevices === false) {
+  const needsAccountImport = !localSettings.onboardingComplete || localDocuments.length === 0;
+  if (!householdMember && remote && remote.settings.shareWithDevices === false && !needsAccountImport) {
     return { documents: localDocuments, settings: localSettings, changed: false, imported: false };
   }
   const merged = options.replaceRemote || !remote ? local : mergeIndexes(local, remote);

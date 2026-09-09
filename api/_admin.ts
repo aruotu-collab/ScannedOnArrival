@@ -5,8 +5,22 @@ export const ADMIN_EMAIL = "aruotu@gmail.com";
 
 const ALLOWED_PATHS = new Set(["/", "/tree", "/inbox", "/settings", "/demo", "/admin"]);
 
+export function accountEmailKey(raw: string | null | undefined): string {
+  const trimmed = (raw || "").trim().toLowerCase();
+  const at = trimmed.lastIndexOf("@");
+  if (at <= 0) return trimmed;
+  let local = trimmed.slice(0, at);
+  const domain = trimmed.slice(at + 1);
+  if (domain === "gmail.com" || domain === "googlemail.com") {
+    const plus = local.indexOf("+");
+    if (plus >= 0) local = local.slice(0, plus);
+    return `${local.replace(/\./g, "")}@gmail.com`;
+  }
+  return trimmed;
+}
+
 export function isAdminEmail(email: string): boolean {
-  return email.trim().toLowerCase() === ADMIN_EMAIL;
+  return accountEmailKey(email) === ADMIN_EMAIL;
 }
 
 export async function requireAdmin(request: Request): Promise<{ id: string; email: string } | null> {
