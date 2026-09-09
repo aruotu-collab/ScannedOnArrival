@@ -54,11 +54,17 @@ export interface CategoryDef {
   label: string;
 }
 
+export interface HouseholdPerson {
+  id: string;
+  name: string;
+}
+
 export interface DocumentRecord {
   id: string;
   title: string;
   typeId: DocumentTypeId;
   categoryId: string;
+  personId?: string;
   period?: string;
   issuedOn?: string;
   expiresOn?: string;
@@ -131,6 +137,7 @@ export interface AppSettings {
   openaiApiKey: string;
   customCategories: CategoryDef[];
   customTypes: CustomTypeDef[];
+  people: HouseholdPerson[];
   mailboxSkipped: string[];
 }
 
@@ -159,6 +166,7 @@ export interface AddDraft {
   title: string;
   typeId: DocumentTypeId;
   categoryId: string;
+  personId?: string;
   period: string;
   issuedOn: string;
   expiresOn: string;

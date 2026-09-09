@@ -1,4 +1,9 @@
-import type { DocumentRecord, InboxItem } from "../types";
+import type { DocumentRecord, HouseholdPerson, InboxItem } from "../types";
+
+export const SAMPLE_PEOPLE: HouseholdPerson[] = [
+  { id: "alex", name: "Alex" },
+  { id: "sam", name: "Sam" },
+];
 
 export const SAMPLE_DOCUMENTS: DocumentRecord[] = [
   {
@@ -69,6 +74,7 @@ export const SAMPLE_DOCUMENTS: DocumentRecord[] = [
     title: "Passport",
     typeId: "passport",
     categoryId: "identity",
+    personId: "alex",
     issuedOn: "2021-06-11",
     expiresOn: "2031-06-11",
     lastChecked: "2026-07-01",
@@ -94,6 +100,22 @@ export const SAMPLE_DOCUMENTS: DocumentRecord[] = [
     source: "files",
     locationLabel: "Files → Car → MOT",
     locationProvider: "files",
+    isCurrent: true,
+  },
+  {
+    id: "sample-passport-sam",
+    title: "Passport",
+    typeId: "passport",
+    categoryId: "identity",
+    personId: "sam",
+    issuedOn: "2019-09-02",
+    expiresOn: "2029-09-02",
+    lastChecked: "2026-06-12",
+    createdAt: "2026-06-12T10:00:00.000Z",
+    storageKind: "referenced",
+    source: "reference",
+    locationLabel: "iCloud Drive → Documents → Identity → Sam",
+    locationProvider: "icloud",
     isCurrent: true,
   },
 ];

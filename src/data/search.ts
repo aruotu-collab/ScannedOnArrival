@@ -1,5 +1,6 @@
-import type { DocumentRecord } from "../types";
+import type { DocumentRecord, HouseholdPerson } from "../types";
 import { todayIso } from "../lib/storage";
+import { personLabel } from "./household";
 import { isSuperseded } from "./status";
 import { categoryLabel, typeById } from "./taxonomy";
 
@@ -7,8 +8,9 @@ export function normalizeQuery(query: string): string {
   return query.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
-export function documentSearchText(doc: DocumentRecord): string {
+export function documentSearchText(doc: DocumentRecord, people: HouseholdPerson[] = []): string {
   const type = typeById(doc.typeId);
+  const owner = personLabel(people, doc.personId);
   return [
     doc.title,
     doc.period,
@@ -18,6 +20,8 @@ export function documentSearchText(doc: DocumentRecord): string {
     type.label,
     type.folderName,
     categoryLabel(doc.categoryId),
+    owner,
+    doc.personId ? owner : "household shared",
     doc.isCurrent ? "current" : "",
     isSuperseded(doc) ? "outdated previous" : "relevant",
     doc.storageKind === "stored" ? "stored" : "referenced",
@@ -27,17 +31,21 @@ export function documentSearchText(doc: DocumentRecord): string {
     .toLowerCase();
 }
 
-export function documentMatchesQuery(doc: DocumentRecord, query: string): boolean {
+export function documentMatchesQuery(doc: DocumentRecord, query: string, people: HouseholdPerson[] = []): boolean {
   const q = normalizeQuery(query);
   if (!q) return true;
-  const hay = documentSearchText(doc);
+  const hay = documentSearchText(doc, people);
   return q.split(" ").every((part) => hay.includes(part));
 }
 
-export function searchDocuments(documents: DocumentRecord[], query: string): DocumentRecord[] {
+export function searchDocuments(
+  documents: DocumentRecord[],
+  query: string,
+  people: HouseholdPerson[] = [],
+): DocumentRecord[] {
   if (!normalizeQuery(query)) return documents;
   return documents
-    .filter((doc) => documentMatchesQuery(doc, query))
+    .filter((doc) => documentMatchesQuery(doc, query, people))
     .sort((a, b) => Number(b.isCurrent) - Number(a.isCurrent) || b.createdAt.localeCompare(a.createdAt));
 }
 

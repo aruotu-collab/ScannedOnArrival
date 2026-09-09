@@ -84,3 +84,17 @@ export function providerLabel(provider: DocumentRecord["locationProvider"]): str
 export function storageVerb(doc: DocumentRecord): string {
   return doc.storageKind === "stored" ? "Stored here" : "Referenced here";
 }
+
+export function locationUrl(label?: string): string | null {
+  const value = label?.trim() ?? "";
+  if (/^https?:\/\//i.test(value)) return value;
+  return null;
+}
+
+export function referencedOpenHint(doc: DocumentRecord): string {
+  if (locationUrl(doc.locationLabel)) {
+    return "This listing has a web link. Open it, or pick the file from Files to view it here.";
+  }
+  const place = providerLabel(doc.locationProvider);
+  return `The file stays in ${place}. This browser cannot open that folder for you — copy the path, or pick the file here to view it.`;
+}

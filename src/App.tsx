@@ -7,6 +7,7 @@ import type {
   DocumentTypeDef,
   DocumentTypeId,
   FoundEmailDoc,
+  HouseholdPerson,
   InboxItem,
   LocationProvider,
   SourceKind,
@@ -20,7 +21,14 @@ import {
   suggestedPath,
   typeById,
 } from "./data/taxonomy";
-import { SAMPLE_DOCUMENTS, SAMPLE_INBOX } from "./data/sample";
+import { SAMPLE_DOCUMENTS, SAMPLE_INBOX, SAMPLE_PEOPLE } from "./data/sample";
+import {
+  documentsForFilter,
+  missingTypeRows,
+  personLabel,
+  sameOwner,
+  type PersonFilterId,
+} from "./data/household";
 import {
   confirmInboxFile,
   copyText,
@@ -47,7 +55,8 @@ import {
   outlookHasSession,
 } from "./lib/outlook";
 import { mailboxRef, rememberFoundEmail } from "./lib/mailbox";
-import { computeStatus, isSuperseded, locationLine } from "./data/status";
+import { computeStatus, isSuperseded, locationLine, locationUrl, referencedOpenHint } from "./data/status";
+import { previewPagesFromBlob, urlsFromPreviewPages } from "./lib/viewFile";
 import {
   formatCheckedDate,
   isCheckedToday,
@@ -100,6 +109,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   openaiApiKey: "",
   customCategories: [],
   customTypes: [],
+  people: [],
   mailboxSkipped: [],
 };
 
@@ -338,6 +348,7 @@ export default function App() {
   const [docQuery, setDocQuery] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [focusDocId, setFocusDocId] = useState<string | null>(null);
+  const [personFilter, setPersonFilter] = useState<PersonFilterId>("all");
 
   useEffect(() => {
     let alive = true;
@@ -355,6 +366,7 @@ export default function App() {
           ...(storedSettings ?? {}),
           customCategories: storedSettings?.customCategories ?? [],
           customTypes: storedSettings?.customTypes ?? [],
+          people: storedSettings?.people ?? [],
           mailboxSkipped: storedSettings?.mailboxSkipped ?? [],
           inboxAddress: ensureInboxAddress(storedSettings?.inboxAddress),
         };
@@ -456,6 +468,7 @@ export default function App() {
       ...next,
       customCategories: next.customCategories ?? [],
       customTypes: next.customTypes ?? [],
+      people: next.people ?? [],
       mailboxSkipped: next.mailboxSkipped ?? [],
     };
     setCatalogExtras(safe.customCategories, safe.customTypes);
@@ -509,6 +522,29 @@ export default function App() {
     return { typeId, categoryId };
   };
 
+  const createPerson = async (name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) throw new Error("Enter a name.");
+    const existing = (settings.people ?? []).find((person) => person.name.toLowerCase() === trimmed.toLowerCase());
+    if (existing) return existing;
+    const used = new Set((settings.people ?? []).map((person) => person.id));
+    const person = { id: slugifyCatalogId(trimmed, used), name: trimmed };
+    await persistSettings({
+      ...settings,
+      people: [...(settings.people ?? []), person],
+    });
+    return person;
+  };
+
+  const removePerson = async (id: string) => {
+    await persistDocs(documents.map((doc) => (doc.personId === id ? { ...doc, personId: undefined } : doc)));
+    await persistSettings({
+      ...settings,
+      people: (settings.people ?? []).filter((person) => person.id !== id),
+    });
+    if (personFilter === id) setPersonFilter("all");
+  };
+
   const persistDocs = async (next: DocumentRecord[]) => {
     setDocuments(next);
     await saveDocuments(next);
@@ -523,6 +559,37 @@ export default function App() {
     const next = documents.map((doc) => (doc.id === id ? { ...doc, lastChecked: todayIso() } : doc));
     await persistDocs(next);
     setToast("Marked as checked today");
+  };
+
+  const keepReferencedCopy = async (original: DocumentRecord, file: File) => {
+    const pdf = isPdf(file) || (await blobLooksLikePdf(file));
+    let pagesToStore = [file];
+    if (pdf) {
+      try {
+        pagesToStore = await rasterizePdfForStorage(file);
+      } catch {
+        pagesToStore = [file];
+      }
+    }
+    for (let index = 0; index < pagesToStore.length; index += 1) {
+      await saveFileBlob({
+        id: pageBlobId(original.id, index),
+        documentId: original.id,
+        blob: pagesToStore[index],
+      });
+    }
+    const updated: DocumentRecord = {
+      ...original,
+      storageKind: "stored",
+      locationLabel: "Stored locally in ScannedOnArrival",
+      locationProvider: "local",
+      fileName: file.name,
+      mimeType: pagesToStore[0]?.type || file.type,
+      pageCount: pagesToStore.length,
+      lastChecked: todayIso(),
+    };
+    await persistDocs(documents.map((doc) => (doc.id === original.id ? updated : doc)));
+    setToast("Kept a copy on this phone");
   };
 
   const saveEditedDocument = async (
@@ -542,7 +609,7 @@ export default function App() {
     };
     const saved = documents.map((doc) => {
       if (doc.id === original.id) return updated;
-      if (makeCurrent && doc.typeId === updated.typeId && doc.isCurrent) {
+      if (makeCurrent && doc.typeId === updated.typeId && doc.isCurrent && sameOwner(doc, updated)) {
         return { ...doc, isCurrent: false, supersededBy: original.id };
       }
       if (!makeCurrent && doc.supersededBy === original.id) {
@@ -601,9 +668,17 @@ export default function App() {
     };
   }, [hydrated, settings.privacyMode, settings.inboxAddress]);
 
-  const currentDocs = documents.filter((d) => d.isCurrent);
-  const attention = useMemo(() => listAttention(documents), [documents]);
-  const searchHits = useMemo(() => searchDocuments(documents, docQuery), [documents, docQuery]);
+  const people = settings.people ?? [];
+  const visibleDocuments = useMemo(
+    () => documentsForFilter(documents, personFilter),
+    [documents, personFilter],
+  );
+  const currentDocs = visibleDocuments.filter((d) => d.isCurrent);
+  const attention = useMemo(() => listAttention(visibleDocuments), [visibleDocuments]);
+  const searchHits = useMemo(
+    () => searchDocuments(visibleDocuments, docQuery, people),
+    [visibleDocuments, docQuery, people],
+  );
   const searching = Boolean(docQuery.trim());
   const editingDoc = editingId ? documents.find((doc) => doc.id === editingId) ?? null : null;
 
@@ -619,7 +694,12 @@ export default function App() {
   const startDemo = async () => {
     await persistDocs(SAMPLE_DOCUMENTS);
     await persistInbox(SAMPLE_INBOX);
-    await persistSettings({ ...settings, onboardingComplete: true, showDemoHousehold: true });
+    await persistSettings({
+      ...settings,
+      onboardingComplete: true,
+      showDemoHousehold: true,
+      people: SAMPLE_PEOPLE,
+    });
   };
 
   const startTryDemo = async () => {
@@ -716,9 +796,9 @@ export default function App() {
 
   const addDocument = async (draft: AddDraft, makeCurrent: boolean) => {
     const id = uid();
-    const sameType = documents.filter((d) => d.typeId === draft.typeId);
+    const sameType = documents.filter((d) => d.typeId === draft.typeId && sameOwner(d, draft));
     const nextDocs = documents.map((d) =>
-      makeCurrent && d.typeId === draft.typeId && d.isCurrent
+      makeCurrent && d.typeId === draft.typeId && d.isCurrent && sameOwner(d, draft)
         ? { ...d, isCurrent: false, supersededBy: id }
         : d,
     );
@@ -730,6 +810,7 @@ export default function App() {
       title: draft.title,
       typeId: draft.typeId,
       categoryId: draft.categoryId,
+      personId: draft.personId || undefined,
       period: draft.period || undefined,
       issuedOn: draft.issuedOn || undefined,
       expiresOn: draft.expiresOn || undefined,
@@ -1093,7 +1174,7 @@ export default function App() {
             <p>
               {view === "demo" && "Scan the letter, check the page, then save it under Council Tax."}
               {(view === "documents" || view === "ready") && "Scan a letter, then tap a category. What’s current, missing, or overdue sits with the file."}
-              {view === "tree" && "A filing-cabinet view. Move a file to another folder, or add a category. The files can live anywhere."}
+              {view === "tree" && "A filing-cabinet view. Move a file, add a folder, or filter by person. The files can live anywhere."}
               {view === "inbox" && "Letterbox or inbox: both are ways documents arrive. Email stays optional."}
               {view === "settings" && "Keep the privacy story clear. Local by default, convenience only if you choose it."}
             </p>
@@ -1141,14 +1222,19 @@ export default function App() {
               resultCount={searching ? searchHits.length : undefined}
             />
           )}
+          {(view === "documents" || view === "ready" || view === "tree") && people.length > 0 && (
+            <PersonFilter people={people} value={personFilter} onChange={setPersonFilter} />
+          )}
           {(view === "documents" || view === "ready") && (
             <>
               {searching ? (
-                <SearchResults documents={searchHits} onOpen={openSearchHit} />
+                <SearchResults documents={searchHits} people={people} onOpen={openSearchHit} />
               ) : (
                 <>
                   <HomeStatus
-                    documents={documents}
+                    documents={visibleDocuments}
+                    people={people}
+                    personFilter={personFilter}
                     attention={attention}
                     onOpenAttention={(typeId, documentId) => {
                       setExpandedTypeId(typeId);
@@ -1160,7 +1246,9 @@ export default function App() {
                   />
                   <DocumentsView
                     documents={currentDocs}
-                    allDocuments={documents}
+                    allDocuments={visibleDocuments}
+                    people={people}
+                    personFilter={personFilter}
                     expandedTypeId={expandedTypeId}
                     focusDocId={focusDocId}
                     onFocused={() => setFocusDocId(null)}
@@ -1178,6 +1266,7 @@ export default function App() {
                       const ok = await copyText(label);
                       setToast(ok ? "Location copied" : "Could not copy the location.");
                     }}
+                    onKeepLocal={(doc, file) => keepReferencedCopy(doc, file)}
                     onDeleted={async (id) => {
                       await deleteDocument(id);
                       setDocuments(documents.filter((d) => d.id !== id));
@@ -1190,8 +1279,9 @@ export default function App() {
           )}
           {view === "tree" && (
             <TreeView
-              documents={searching ? searchHits : documents}
+              documents={searching ? searchHits : visibleDocuments}
               allDocuments={documents}
+              people={people}
               query={docQuery}
               onSelect={(id) => {
                 const doc = documents.find((item) => item.id === id);
@@ -1247,6 +1337,8 @@ export default function App() {
               installPrompt={installPrompt}
               onInstalled={() => setInstallPrompt(null)}
               onSettings={persistSettings}
+              onCreatePerson={createPerson}
+              onRemovePerson={removePerson}
               onToast={setToast}
               onExport={async () => {
                 try {
@@ -1267,6 +1359,7 @@ export default function App() {
                     ...restored.settings,
                     customCategories: restored.settings.customCategories ?? [],
                     customTypes: restored.settings.customTypes ?? [],
+                    people: restored.settings.people ?? [],
                     mailboxSkipped: restored.settings.mailboxSkipped ?? [],
                     inboxAddress: ensureInboxAddress(restored.settings.inboxAddress),
                   };
@@ -1316,6 +1409,9 @@ export default function App() {
           incomingFile={incomingFile}
           incomingMethod={incomingMethod}
           openaiApiKey={settings.openaiApiKey}
+          people={people}
+          defaultPersonId={personFilter !== "all" && personFilter !== "household" ? personFilter : ""}
+          onCreatePerson={createPerson}
           onClose={() => {
             setAddOpen(false);
             setIncomingFile(null);
@@ -1337,6 +1433,8 @@ export default function App() {
           onSave={saveEditedDocument}
           onCreateCategory={createCategory}
           onCreateType={createType}
+          people={people}
+          onCreatePerson={createPerson}
         />
       )}
       {mailboxPreview && (
@@ -1796,22 +1894,20 @@ function ConfirmDialog({
 
 function HomeStatus({
   documents,
+  people,
+  personFilter,
   attention,
   onOpenAttention,
 }: {
   documents: DocumentRecord[];
+  people: HouseholdPerson[];
+  personFilter: PersonFilterId;
   attention: AttentionItem[];
   onOpenAttention: (typeId: string | null, documentId?: string) => void;
 }) {
   type StatusTab = "current" | "attention" | "missing";
   const [tab, setTab] = useState<StatusTab>(attention.length > 0 ? "attention" : "current");
   const [panelOpen, setPanelOpen] = useState(false);
-  const currentByType = documents.filter((d) => d.isCurrent);
-  const rows = allTypes().filter((t) => t.id !== "other").map((type) => {
-    const doc = currentByType.find((d) => d.typeId === type.id);
-    const status = doc ? computeStatus(doc) : "missing";
-    return { type, doc, status };
-  });
   const currentRows = documents
     .filter((doc) => !isSuperseded(doc) && computeStatus(doc) === "current")
     .sort((a, b) => Number(b.isCurrent) - Number(a.isCurrent) || b.createdAt.localeCompare(a.createdAt))
@@ -1825,18 +1921,16 @@ function HomeStatus({
       badge: doc.isCurrent ? "Current" : "Relevant",
       kind: "current" as const,
     }));
-  const missingRows = rows
-    .filter((row) => row.status === "missing")
-    .map((row) => ({
-      key: row.type.id,
-      typeId: row.type.id,
-      documentId: undefined as string | undefined,
-      title: "Nothing saved here yet",
-      typeLabel: row.type.label,
-      detail: "Scan or add a PDF into this type",
-      badge: "Missing",
-      kind: "missing" as const,
-    }));
+  const missingRows = missingTypeRows(documents, people, personFilter).map((row) => ({
+    key: row.key,
+    typeId: row.typeId,
+    documentId: undefined as string | undefined,
+    title: "Nothing saved here yet",
+    typeLabel: row.typeLabel,
+    detail: row.detail,
+    badge: "Missing",
+    kind: "missing" as const,
+  }));
   const attentionRows = attention.map((item) => ({
     key: item.key,
     typeId: documents.find((doc) => doc.id === item.documentId)?.typeId ?? null,
@@ -1998,34 +2092,35 @@ function syncNameplateOffset() {
   return offset;
 }
 
-function revealCategoryTitle(categoryId: string, smooth = true) {
-  const card = document.getElementById(`category-${categoryId}`);
-  if (!card) return;
-  const offset = syncNameplateOffset();
-  const top = card.getBoundingClientRect().top;
-  const overlap = offset - top;
-  if (overlap <= 1) return;
-  const scroller = documentsScroller();
-  const next = Math.max(0, scroller.scrollTop - overlap);
-  if (Math.abs(next - scroller.scrollTop) < 1) return;
-  scroller.scrollTo({
-    top: next,
-    behavior: smooth && !prefersReducedMotion() ? "smooth" : "auto",
-  });
+function categoryCards() {
+  return [...document.querySelectorAll<HTMLElement>(".doc-category-card")];
 }
 
-function focusOpenedCategory(categoryId: string, documentId?: string | null, smooth = true) {
+function alignCategoryStack(categoryId: string, smooth = true) {
   const card = document.getElementById(`category-${categoryId}`);
   if (!card) return false;
   const offset = syncNameplateOffset();
-  const delta = card.getBoundingClientRect().top - offset;
+  const cards = categoryCards();
+  const index = cards.indexOf(card as HTMLElement);
+  const target = index > 0 ? cards[index - 1] : card;
+  const delta = target.getBoundingClientRect().top - offset;
+  if (Math.abs(delta) <= 2) return true;
   const scroller = documentsScroller();
-  if (Math.abs(delta) > 2) {
-    scroller.scrollTo({
-      top: Math.max(0, scroller.scrollTop + delta),
-      behavior: smooth && !prefersReducedMotion() ? "smooth" : "auto",
-    });
+  const top = Math.max(0, scroller.scrollTop + delta);
+  if (smooth && !prefersReducedMotion()) {
+    scroller.scrollTo({ top, behavior: "smooth" });
+  } else {
+    scroller.scrollTop = top;
   }
+  return true;
+}
+
+function revealCategoryTitle(categoryId: string, smooth = true) {
+  alignCategoryStack(categoryId, smooth);
+}
+
+function focusOpenedCategory(categoryId: string, documentId?: string | null, smooth = true) {
+  if (!alignCategoryStack(categoryId, smooth)) return false;
   if (documentId) {
     const slide = document.getElementById(`doc-${documentId}`);
     const rail = slide?.closest(".doc-rail");
@@ -2117,6 +2212,125 @@ function TypeTabStrip({
   );
 }
 
+function PersonFilter({
+  people,
+  value,
+  onChange,
+}: {
+  people: HouseholdPerson[];
+  value: PersonFilterId;
+  onChange: (value: PersonFilterId) => void;
+}) {
+  return (
+    <div className="person-filter" role="tablist" aria-label="Whose papers">
+      <button type="button" role="tab" className={value === "all" ? "active" : ""} aria-selected={value === "all"} onClick={() => onChange("all")}>
+        All
+      </button>
+      <button
+        type="button"
+        role="tab"
+        className={value === "household" ? "active" : ""}
+        aria-selected={value === "household"}
+        onClick={() => onChange("household")}
+      >
+        Household
+      </button>
+      {people.map((person) => (
+        <button
+          key={person.id}
+          type="button"
+          role="tab"
+          className={value === person.id ? "active" : ""}
+          aria-selected={value === person.id}
+          onClick={() => onChange(person.id)}
+        >
+          {person.name}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function WhoseField({
+  people,
+  personId,
+  onChange,
+  onCreatePerson,
+}: {
+  people: HouseholdPerson[];
+  personId: string;
+  onChange: (personId: string) => void;
+  onCreatePerson: (name: string) => Promise<HouseholdPerson>;
+}) {
+  const [creating, setCreating] = useState(false);
+  const [name, setName] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  return (
+    <>
+      <label className="field">
+        <span>Whose</span>
+        <select
+          value={creating ? "__new__" : personId}
+          onChange={(event) => {
+            if (event.target.value === "__new__") {
+              setCreating(true);
+              return;
+            }
+            setCreating(false);
+            onChange(event.target.value);
+          }}
+        >
+          <option value="">Household — shared</option>
+          {people.map((person) => (
+            <option key={person.id} value={person.id}>
+              {person.name}
+            </option>
+          ))}
+          <option value="__new__">Add a person…</option>
+        </select>
+      </label>
+      {creating && (
+        <div className="row">
+          <label className="field" style={{ flex: 1 }}>
+            <span>Name</span>
+            <input
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              placeholder="Alex, Sam…"
+            />
+          </label>
+          <button
+            className="primary"
+            type="button"
+            disabled={!name.trim()}
+            onClick={() => {
+              void (async () => {
+                try {
+                  const created = await onCreatePerson(name);
+                  setCreating(false);
+                  setName("");
+                  setError(null);
+                  onChange(created.id);
+                } catch (err) {
+                  setError(err instanceof Error ? err.message : "Could not add that person.");
+                }
+              })();
+            }}
+          >
+            Add
+          </button>
+        </div>
+      )}
+      {error && (
+        <div className="modal-status warn" role="status">
+          {error}
+        </div>
+      )}
+    </>
+  );
+}
+
 function DocumentSearch({
   value,
   onChange,
@@ -2155,9 +2369,11 @@ function DocumentSearch({
 
 function SearchResults({
   documents,
+  people,
   onOpen,
 }: {
   documents: DocumentRecord[];
+  people: HouseholdPerson[];
   onOpen: (doc: DocumentRecord) => void;
 }) {
   if (documents.length === 0) {
@@ -2181,6 +2397,7 @@ function SearchResults({
               </span>
             </div>
             <span className="meta">
+              {people.length > 0 ? `${personLabel(people, doc.personId)} · ` : ""}
               {categoryLabel(doc.categoryId)} → {typeById(doc.typeId).label}
               {doc.period ? ` · ${doc.period}` : ""} · Checked {formatCheckedDate(doc.lastChecked)}
             </span>
@@ -2194,6 +2411,8 @@ function SearchResults({
 function DocumentsView({
   documents,
   allDocuments,
+  people,
+  personFilter,
   expandedTypeId,
   focusDocId,
   onFocused,
@@ -2205,10 +2424,13 @@ function DocumentsView({
   onEdit,
   onChecked,
   onCopyLocation,
+  onKeepLocal,
   onDeleted,
 }: {
   documents: DocumentRecord[];
   allDocuments: DocumentRecord[];
+  people: HouseholdPerson[];
+  personFilter: PersonFilterId;
   expandedTypeId: string | null;
   focusDocId?: string | null;
   onFocused?: () => void;
@@ -2220,6 +2442,7 @@ function DocumentsView({
   onEdit: (id: string) => void;
   onChecked: (id: string) => void;
   onCopyLocation: (label: string) => void;
+  onKeepLocal: (doc: DocumentRecord, file: File) => Promise<void>;
   onDeleted: (id: string) => void;
 }) {
   const catalog = allCategories()
@@ -2234,13 +2457,16 @@ function DocumentsView({
         const current = copies.find((doc) => doc.isCurrent) ?? copies[0];
         return current ? computeStatus(current) : "missing";
       });
+      const missingHere = missingTypeRows(allDocuments, people, personFilter).filter((row) =>
+        types.some((type) => type.id === row.typeId),
+      ).length;
       return {
         category,
         types,
         count,
         ready: statuses.filter((status) => status === "current").length,
         attention: statuses.filter((status) => status === "outdated" || status === "expiring").length,
-        missing: statuses.filter((status) => status === "missing").length,
+        missing: missingHere,
       };
     })
     .filter((group) => group.types.length);
@@ -2248,7 +2474,19 @@ function DocumentsView({
   const selectedType = expandedTypeId ? typeById(expandedTypeId) : null;
   const selectedCategoryId =
     catalog.find((group) => group.category.id === selectedType?.categoryId)?.category.id ?? null;
+  const selectedCategoryIndex = catalog.findIndex((group) => group.category.id === selectedCategoryId);
+  const categoryPeek =
+    selectedCategoryIndex < 0
+      ? "none"
+      : selectedCategoryIndex > 0 && selectedCategoryIndex < catalog.length - 1
+        ? "both"
+        : selectedCategoryIndex > 0
+          ? "prev"
+          : selectedCategoryIndex < catalog.length - 1
+            ? "next"
+            : "none";
   const pendingPin = useRef<{ id: string; y: number } | null>(null);
+  const stackSwipe = useRef<{ x: number; y: number; fromStack: boolean } | null>(null);
   const onFocusedRef = useRef(onFocused);
   onFocusedRef.current = onFocused;
 
@@ -2276,12 +2514,32 @@ function DocumentsView({
     if (preferred) selectType(preferred.id, pinY);
   };
 
+  const endStackSwipe = (event: PointerEvent<HTMLDivElement>) => {
+    const start = stackSwipe.current;
+    stackSwipe.current = null;
+    if (!start?.fromStack || !selectedCategoryId) return;
+    const dx = event.clientX - start.x;
+    const dy = event.clientY - start.y;
+    if (Math.abs(dy) < 64 || Math.abs(dy) <= Math.abs(dx)) return;
+    const next = catalog[selectedCategoryIndex + (dy < 0 ? 1 : -1)];
+    if (next) selectCategory(next.category.id);
+  };
+
   useLayoutEffect(() => {
     if (!selectedCategoryId) return;
     const pin = pendingPin.current;
     pendingPin.current = null;
     const card = document.getElementById(`category-${selectedCategoryId}`);
     if (!card) return;
+    const catalogEl = card.closest(".docs-catalog");
+    const cards = categoryCards();
+    const index = cards.indexOf(card as HTMLElement);
+    const headHeight = (item?: HTMLElement) =>
+      item?.querySelector<HTMLElement>(".doc-category-card-head")?.offsetHeight ?? 0;
+    const peek = Math.max(headHeight(cards[index - 1]), headHeight(cards[index + 1]), 72);
+    if (catalogEl instanceof HTMLElement) {
+      catalogEl.style.setProperty("--category-peek", `${peek}px`);
+    }
 
     if (pin && pin.id === selectedCategoryId) {
       const drift = card.getBoundingClientRect().top - pin.y;
@@ -2292,7 +2550,11 @@ function DocumentsView({
 
     revealCategoryTitle(selectedCategoryId, false);
     const retry = window.setTimeout(() => revealCategoryTitle(selectedCategoryId, false), 340);
-    return () => window.clearTimeout(retry);
+    const settle = window.setTimeout(() => revealCategoryTitle(selectedCategoryId, false), 700);
+    return () => {
+      window.clearTimeout(retry);
+      window.clearTimeout(settle);
+    };
   }, [selectedCategoryId]);
 
   useLayoutEffect(() => {
@@ -2321,8 +2583,27 @@ function DocumentsView({
           <p>Tap a category, pick a type tab, then Scan with your phone. That type is selected before the camera opens.</p>
         </div>
       )}
-      {catalog.map((group) => {
+      <div
+        className="docs-catalog"
+        data-peeks={categoryPeek}
+        onPointerDown={(event) => {
+          if (!selectedCategoryId) return;
+          const fromStack = Boolean(
+            (event.target as HTMLElement | null)?.closest(
+              ".doc-category-card-head, .doc-type-tabs, .preview, .page-rail, .doc-rail",
+            ),
+          );
+          stackSwipe.current = { x: event.clientX, y: event.clientY, fromStack };
+        }}
+        onPointerUp={endStackSwipe}
+        onPointerCancel={() => {
+          stackSwipe.current = null;
+        }}
+      >
+      {catalog.map((group, index) => {
         const selected = group.category.id === selectedCategoryId;
+        const peekPrev = selectedCategoryIndex > 0 && index === selectedCategoryIndex - 1;
+        const peekNext = selectedCategoryIndex >= 0 && index === selectedCategoryIndex + 1;
         const activeType =
           group.types.find((type) => type.id === expandedTypeId) ??
           group.types.find((type) => copiesForType(allDocuments, type.id).length > 0) ??
@@ -2333,7 +2614,7 @@ function DocumentsView({
           <section
             key={group.category.id}
             id={`category-${group.category.id}`}
-            className={`doc-category-card ${selected ? "selected" : ""}`}
+            className={`doc-category-card ${selected ? "selected" : ""} ${peekPrev ? "peek-prev" : ""} ${peekNext ? "peek-next" : ""}`}
           >
             <div className="doc-category-card-head">
               <button
@@ -2341,7 +2622,10 @@ function DocumentsView({
                 className="doc-category-card-select"
                 aria-expanded={selected}
                 aria-pressed={selected}
-                onClick={(event) => selectCategory(group.category.id, event.currentTarget.getBoundingClientRect().top)}
+                onClick={(event) => {
+                  selectCategory(group.category.id, event.currentTarget.getBoundingClientRect().top);
+                  event.currentTarget.blur();
+                }}
               >
                 <div className="doc-category-copy">
                   <div className="doc-category-title">
@@ -2377,7 +2661,10 @@ function DocumentsView({
                 className="doc-category-chevron-btn"
                 aria-expanded={selected}
                 aria-label={selected ? `Collapse ${group.category.label}` : `Expand ${group.category.label}`}
-                onClick={(event) => selectCategory(group.category.id, event.currentTarget.getBoundingClientRect().top)}
+                onClick={(event) => {
+                  selectCategory(group.category.id, event.currentTarget.getBoundingClientRect().top);
+                  event.currentTarget.blur();
+                }}
               >
                 <span className="doc-category-chevron" aria-hidden="true" />
               </button>
@@ -2413,10 +2700,12 @@ function DocumentsView({
                             <DocumentDetail
                               doc={doc}
                               previous={copies.filter((item) => item.id !== doc.id)}
+                              ownerLabel={people.length > 0 ? personLabel(people, doc.personId) : undefined}
                               compact
                               onEdit={() => onEdit(doc.id)}
                               onChecked={() => onChecked(doc.id)}
                               onCopyLocation={() => onCopyLocation(doc.locationLabel)}
+                              onKeepLocal={(file) => onKeepLocal(doc, file)}
                               onDeleted={() => onDeleted(doc.id)}
                             />
                           </div>
@@ -2430,6 +2719,7 @@ function DocumentsView({
           </section>
         );
       })}
+      </div>
     </>
   );
 }
@@ -2781,6 +3071,7 @@ function PageRail({
 }) {
   const [index, setIndex] = useState(0);
   const swipeStart = useRef<{ x: number; y: number; page: number } | null>(null);
+  const swipeAxis = useRef<"x" | "y" | null>(null);
   const swiped = useRef(false);
   const [dragX, setDragX] = useState(0);
   const [dragging, setDragging] = useState(false);
@@ -2790,12 +3081,14 @@ function PageRail({
   };
 
   const endDrag = (event: PointerEvent<HTMLDivElement>) => {
-    event.stopPropagation();
     const start = swipeStart.current;
+    const axis = swipeAxis.current;
     swipeStart.current = null;
+    swipeAxis.current = null;
     setDragging(false);
     setDragX(0);
-    if (!start || pages.length < 2) return;
+    if (axis === "x") event.stopPropagation();
+    if (!start || axis !== "x" || pages.length < 2) return;
     const dx = event.clientX - start.x;
     const dy = event.clientY - start.y;
     const width = event.currentTarget.clientWidth || 1;
@@ -2810,30 +3103,35 @@ function PageRail({
         className={`page-rail ${pages.length > 1 ? "swipeable" : ""}`}
         aria-label="Document pages"
         onPointerDown={(event) => {
-          event.stopPropagation();
           if (pages.length < 2) return;
-          event.currentTarget.setPointerCapture(event.pointerId);
           swipeStart.current = { x: event.clientX, y: event.clientY, page: index };
+          swipeAxis.current = null;
           swiped.current = false;
-          setDragging(true);
-          setDragX(0);
         }}
         onPointerMove={(event) => {
-          event.stopPropagation();
           const start = swipeStart.current;
           if (!start) return;
           const dx = event.clientX - start.x;
           const dy = event.clientY - start.y;
-          if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return;
-          if (Math.abs(dx) <= Math.abs(dy)) return;
+          if (!swipeAxis.current) {
+            if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+            swipeAxis.current = Math.abs(dx) > Math.abs(dy) ? "x" : "y";
+            if (swipeAxis.current === "x") {
+              event.currentTarget.setPointerCapture(event.pointerId);
+              setDragging(true);
+            } else {
+              swipeStart.current = null;
+              return;
+            }
+          }
+          if (swipeAxis.current !== "x") return;
+          event.stopPropagation();
           const atStart = start.page === 0 && dx > 0;
           const atEnd = start.page === pages.length - 1 && dx < 0;
           setDragX(atStart || atEnd ? dx * 0.28 : dx);
         }}
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
-        onTouchStart={(event) => event.stopPropagation()}
-        onTouchMove={(event) => event.stopPropagation()}
       >
         <div
           className={`page-rail-track${dragging ? " dragging" : ""}`}
@@ -2879,25 +3177,35 @@ function PageRail({
 function DocumentDetail({
   doc,
   previous,
+  ownerLabel,
   compact,
   onEdit,
   onChecked,
   onCopyLocation,
+  onKeepLocal,
   onDeleted,
 }: {
   doc: DocumentRecord;
   previous: DocumentRecord[];
+  ownerLabel?: string;
   compact?: boolean;
   onEdit: () => void;
   onChecked: () => void;
   onCopyLocation: () => void;
+  onKeepLocal?: (file: File) => Promise<void>;
   onDeleted: () => void;
 }) {
   const [pages, setPages] = useState<Array<{ url: string; image: boolean }>>([]);
   const [viewerAt, setViewerAt] = useState<number | null>(null);
   const [pagesLoading, setPagesLoading] = useState(doc.storageKind === "stored");
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const [openedFile, setOpenedFile] = useState<File | null>(null);
+  const [openError, setOpenError] = useState<string | null>(null);
+  const [keeping, setKeeping] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const previewRevoke = useRef<(() => void) | null>(null);
   const status = computeStatus(doc);
+  const link = locationUrl(doc.locationLabel);
 
   useEffect(() => {
     let urls: string[] = [];
@@ -2951,6 +3259,27 @@ function DocumentDetail({
     };
   }, [doc.fileName, doc.id, doc.mimeType, doc.pageCount, doc.storageKind]);
 
+  useEffect(() => {
+    return () => previewRevoke.current?.();
+  }, [doc.id]);
+
+  const openReferencedFile = async (file: File) => {
+    setOpenError(null);
+    setPagesLoading(true);
+    try {
+      const preview = urlsFromPreviewPages(await previewPagesFromBlob(file, file.name));
+      previewRevoke.current?.();
+      previewRevoke.current = preview.revoke;
+      setOpenedFile(file);
+      setPages(preview.pages);
+      setViewerAt(0);
+    } catch {
+      setOpenError("Could not open that file here.");
+    } finally {
+      setPagesLoading(false);
+    }
+  };
+
   return (
     <aside className={`card doc-detail${doc.id === DEMO_DOC_ID ? " demo-doc" : ""}`}>
       <div className="doc-detail-top">
@@ -2961,6 +3290,7 @@ function DocumentDetail({
       </div>
       <h2>{doc.title}</h2>
       <p className="meta">
+        {ownerLabel ? `${ownerLabel} · ` : ""}
         {locationLine(doc)} · Checked {formatCheckedDate(doc.lastChecked)}
       </p>
       {doc.notes && <p className="meta">{doc.notes}</p>}
@@ -3009,12 +3339,57 @@ function DocumentDetail({
           pages={pages}
           startAt={viewerAt}
           onClose={() => setViewerAt(null)}
+          primaryAction={
+            doc.storageKind === "referenced" && openedFile && onKeepLocal
+              ? {
+                  label: keeping ? "Keeping…" : "Keep a copy on this phone",
+                  onClick: () => {
+                    if (keeping || !openedFile) return;
+                    void (async () => {
+                      setKeeping(true);
+                      try {
+                        await onKeepLocal(openedFile);
+                        setViewerAt(null);
+                        setOpenedFile(null);
+                      } catch {
+                        setOpenError("Could not keep a copy on this phone.");
+                        setKeeping(false);
+                      }
+                    })();
+                  },
+                }
+              : undefined
+          }
         />
       )}
       {doc.storageKind === "referenced" && (
         <div className="notice">
-          The file stays in its original folder. This app only keeps the listing.
+          {referencedOpenHint(doc)}
+          {openError && (
+            <div className="modal-status warn" role="status" style={{ marginTop: 10 }}>
+              {openError}
+            </div>
+          )}
+          <input
+            ref={fileInputRef}
+            className="visually-hidden"
+            type="file"
+            accept="application/pdf,image/*,.pdf,.png,.jpg,.jpeg,.webp,.heic"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              event.target.value = "";
+              if (file) void openReferencedFile(file);
+            }}
+          />
           <div className="row" style={{ marginTop: 10 }}>
+            <button type="button" className="primary" onClick={() => fileInputRef.current?.click()}>
+              View this file
+            </button>
+            {link && (
+              <button type="button" className="secondary" onClick={() => window.open(link, "_blank", "noopener")}>
+                Open link
+              </button>
+            )}
             <button type="button" className="secondary" onClick={onCopyLocation}>
               Copy location
             </button>
@@ -3068,6 +3443,7 @@ function DocumentDetail({
 function TreeView({
   documents,
   allDocuments,
+  people,
   query,
   onSelect,
   onMove,
@@ -3076,6 +3452,7 @@ function TreeView({
 }: {
   documents: DocumentRecord[];
   allDocuments: DocumentRecord[];
+  people: HouseholdPerson[];
   query?: string;
   onSelect: (id: string) => void;
   onMove: (original: DocumentRecord, typeId: string, categoryId: string, makeCurrent: boolean) => Promise<DocumentRecord>;
@@ -3203,6 +3580,7 @@ function TreeView({
                                   <span className="tree-dot leaf" aria-hidden="true" />
                                   <button type="button" className="tree-name file" onClick={() => onSelect(doc.id)}>
                                     <span className="tree-label">
+                                      {people.length > 0 ? `${personLabel(people, doc.personId)} · ` : ""}
                                       {doc.period ?? doc.title}{" "}
                                       {doc.isCurrent ? "✅ Current" : isSuperseded(doc) ? "" : "· Relevant"}
                                     </span>
@@ -3303,7 +3681,9 @@ function MoveDocumentSheet({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const destHasCurrent = documents.some((item) => item.id !== doc.id && item.typeId === typeId && item.isCurrent);
+  const destHasCurrent = documents.some(
+    (item) => item.id !== doc.id && item.typeId === typeId && item.isCurrent && sameOwner(item, doc),
+  );
   const unchanged = typeId === doc.typeId && categoryId === doc.categoryId;
   const typesHere = allTypes().filter((type) => type.categoryId === categoryId);
 
@@ -3970,6 +4350,8 @@ function SettingsView({
   installPrompt,
   onInstalled,
   onSettings,
+  onCreatePerson,
+  onRemovePerson,
   onExport,
   onRestore,
   onReset,
@@ -3979,6 +4361,8 @@ function SettingsView({
   installPrompt: BeforeInstallPromptEvent | null;
   onInstalled: () => void;
   onSettings: (s: AppSettings) => Promise<void>;
+  onCreatePerson: (name: string) => Promise<HouseholdPerson>;
+  onRemovePerson: (id: string) => Promise<void>;
   onExport: () => Promise<void>;
   onRestore: (file: File) => Promise<void>;
   onReset: () => Promise<void>;
@@ -4030,11 +4414,18 @@ function SettingsView({
           stays on this device; image scans use on-device OCR.
         </p>
       </div>
+      <HouseholdPeopleCard
+        people={settings.people ?? []}
+        onCreatePerson={onCreatePerson}
+        onRemovePerson={onRemovePerson}
+        onToast={onToast}
+      />
       <div className="card">
         <h2>Stored here vs referenced here</h2>
         <p className="meta">
           Stored here means the app has a local copy. Referenced here means the file remains in another location;
-          the app only keeps its description and where to find it.
+          the app only keeps its description and where to find it. This browser cannot open iCloud or Files for you —
+          copy the path, open a link if there is one, or pick the file to view it here.
         </p>
       </div>
       <div className="card">
@@ -4126,23 +4517,92 @@ function SettingsView({
   );
 }
 
+function HouseholdPeopleCard({
+  people,
+  onCreatePerson,
+  onRemovePerson,
+  onToast,
+}: {
+  people: HouseholdPerson[];
+  onCreatePerson: (name: string) => Promise<HouseholdPerson>;
+  onRemovePerson: (id: string) => Promise<void>;
+  onToast: (msg: string) => void;
+}) {
+  const [name, setName] = useState("");
+  return (
+    <div className="card">
+      <h2>Household</h2>
+      <p className="meta">
+        Shared papers stay on Household — council tax, the house, the car. A passport or licence can belong to one
+        person. Filter Scan & Docs and Tree once someone is added.
+      </p>
+      {people.length > 0 && (
+        <ul className="household-people">
+          {people.map((person) => (
+            <li key={person.id}>
+              <span>{person.name}</span>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => {
+                  void (async () => {
+                    await onRemovePerson(person.id);
+                    onToast(`${person.name} removed. Their listings went back to Household.`);
+                  })();
+                }}
+              >
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="row" style={{ marginTop: 12 }}>
+        <label className="field" style={{ flex: 1 }}>
+          <span>Add a person</span>
+          <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Alex, Sam…" />
+        </label>
+        <button
+          className="primary"
+          type="button"
+          disabled={!name.trim()}
+          onClick={() => {
+            void (async () => {
+              const created = await onCreatePerson(name);
+              setName("");
+              onToast(`${created.name} added`);
+            })();
+          }}
+        >
+          Add
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function EditDocumentModal({
   doc,
   onClose,
   onSave,
   onCreateCategory,
   onCreateType,
+  people,
+  onCreatePerson,
 }: {
   doc: DocumentRecord;
   onClose: () => void;
   onSave: (original: DocumentRecord, next: DocumentRecord, makeCurrent: boolean) => Promise<unknown>;
   onCreateCategory: (label: string) => Promise<{ categoryId: string; typeId: string }>;
   onCreateType: (label: string, categoryId: string) => Promise<{ typeId: string; categoryId: string }>;
+  people: HouseholdPerson[];
+  onCreatePerson: (name: string) => Promise<HouseholdPerson>;
 }) {
   const [draft, setDraft] = useState({
     title: doc.title,
     typeId: doc.typeId,
     categoryId: doc.categoryId,
+    personId: doc.personId ?? "",
     period: doc.period ?? "",
     issuedOn: doc.issuedOn ?? "",
     expiresOn: doc.expiresOn ?? "",
@@ -4172,6 +4632,7 @@ function EditDocumentModal({
           title: draft.title.trim(),
           typeId: draft.typeId,
           categoryId: draft.categoryId,
+          personId: draft.personId || undefined,
           period: draft.period,
           issuedOn: draft.issuedOn,
           expiresOn: expiryMode === "na" ? "" : draft.expiresOn,
@@ -4202,6 +4663,12 @@ function EditDocumentModal({
           <span>Title</span>
           <input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} />
         </label>
+        <WhoseField
+          people={people}
+          personId={draft.personId}
+          onChange={(personId) => setDraft({ ...draft, personId })}
+          onCreatePerson={onCreatePerson}
+        />
         <label className="field">
           <span>Category</span>
           <select
@@ -4441,10 +4908,13 @@ function AddDocumentModal({
   incomingFile,
   incomingMethod,
   openaiApiKey,
+  people,
+  defaultPersonId,
   onClose,
   onSave,
   onCreateCategory,
   onCreateType,
+  onCreatePerson,
 }: {
   documents: DocumentRecord[];
   startAt: "choose" | "camera";
@@ -4452,10 +4922,13 @@ function AddDocumentModal({
   incomingFile: File | null;
   incomingMethod: SourceKind | null;
   openaiApiKey: string;
+  people: HouseholdPerson[];
+  defaultPersonId: string;
   onClose: () => void;
   onSave: (draft: AddDraft, makeCurrent: boolean) => Promise<void>;
   onCreateCategory: (label: string) => Promise<{ categoryId: string; typeId: string }>;
   onCreateType: (label: string, categoryId: string) => Promise<{ typeId: string; categoryId: string }>;
+  onCreatePerson: (name: string) => Promise<HouseholdPerson>;
 }) {
   const [step, setStep] = useState<"choose" | "camera" | "pages" | "crop" | "form" | "replace">(
     incomingFile ? "choose" : startAt,
@@ -4487,6 +4960,7 @@ function AddDocumentModal({
       title: intendedType && intendedType.id !== "other" ? intendedType.label : "",
       typeId: type.id,
       categoryId: type.categoryId,
+      personId: defaultPersonId || undefined,
       period: "",
       issuedOn: "",
       expiresOn: "",
@@ -4576,6 +5050,7 @@ function AddDocumentModal({
         title: classified.title,
         typeId: classified.typeId,
         categoryId: typeById(classified.typeId).categoryId,
+        personId: defaultPersonId || undefined,
         period: classified.period ?? "",
         issuedOn: classified.issuedOn ?? "",
         expiresOn: classified.expiresOn ?? "",
@@ -4599,7 +5074,9 @@ function AddDocumentModal({
       const canAuto =
         !reviewFirst && method !== "camera" && classified.typeId !== "other" && classified.confidence !== "low" && !intendedType;
       if (canAuto) {
-        const match = documents.find((d) => d.typeId === next.typeId && d.isCurrent && d.typeId !== "other");
+        const match = documents.find(
+          (d) => d.typeId === next.typeId && d.isCurrent && d.typeId !== "other" && sameOwner(d, next),
+        );
         if (match) {
           setExisting(match);
           setStep("replace");
@@ -4713,7 +5190,9 @@ function AddDocumentModal({
       void submit(true);
       return;
     }
-    const match = documents.find((d) => d.typeId === draft.typeId && d.isCurrent && d.typeId !== "other");
+    const match = documents.find(
+      (d) => d.typeId === draft.typeId && d.isCurrent && d.typeId !== "other" && sameOwner(d, draft),
+    );
     if (match) {
       setExisting(match);
       setStep("replace");
@@ -4942,7 +5421,7 @@ function AddDocumentModal({
                 <img src={draft.previewUrl} alt={draft.title || "Document page"} />
               </div>
             )}
-            {isMailboxAdd(draft.method) && documents.find((d) => d.typeId === draft.typeId && d.isCurrent && d.typeId !== "other") && (
+            {isMailboxAdd(draft.method) && documents.find((d) => d.typeId === draft.typeId && d.isCurrent && d.typeId !== "other" && sameOwner(d, draft)) && (
               <div className="notice">
                 Setting this as current moves your older {typeById(draft.typeId).label} copy into Previous versions. Keep
                 as another relevant copy leaves that current version in place, and this one stays in date.
@@ -4964,6 +5443,12 @@ function AddDocumentModal({
               <span>Title</span>
               <input value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} />
             </label>
+            <WhoseField
+              people={people}
+              personId={draft.personId ?? ""}
+              onChange={(personId) => setDraft({ ...draft, personId: personId || undefined })}
+              onCreatePerson={onCreatePerson}
+            />
             <label className="field">
               <span>Category</span>
               <select
