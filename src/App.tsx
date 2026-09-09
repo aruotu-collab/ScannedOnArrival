@@ -1320,8 +1320,6 @@ export default function App() {
     );
   }
 
-  const accountHello = helloNameFromEmail(accountEmail);
-
   return (
     <div className={`app${view === "demo" || demoLanding ? " demo-mode" : ""}`}>
       <AppNameplate onToast={setToast} />
@@ -1329,7 +1327,6 @@ export default function App() {
         <div className="wordmark">
           <ProductBadge tone="dark" />
           <strong>ScannedOnArrival</strong>
-          {accountHello ? <p className="sidebar-hello">Hi {accountHello}</p> : null}
           <span>What you have, how current it is, and where it lives.</span>
         </div>
         <nav className="nav">

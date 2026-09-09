@@ -134,12 +134,12 @@ button {
 }
 
 .account-menu-btn.with-hello {
-  flex-direction: row;
+  flex-direction: column;
   width: auto;
-  height: 36px;
-  max-width: min(42vw, 240px);
-  gap: 8px;
-  padding: 0 10px 0 6px;
+  height: auto;
+  max-width: min(38vw, 132px);
+  gap: 1px;
+  padding: 1px 0 0;
 }
 
 .account-hello {
@@ -148,11 +148,11 @@ button {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: var(--font-ui);
-  font-size: 0.82rem;
-  font-weight: 650;
+  font-size: 0.55rem;
+  font-weight: 600;
   line-height: 1.15;
   letter-spacing: 0;
-  text-align: left;
+  text-align: center;
   color: #f4efe4;
 }
 
@@ -232,15 +232,6 @@ button {
   color: #d7c7a1;
   font-size: 0.78rem;
   line-height: 1.4;
-}
-
-.sidebar-hello {
-  margin: 2px 0 0;
-  font-family: var(--font-ui);
-  font-size: 1rem;
-  font-weight: 650;
-  letter-spacing: 0;
-  color: #fffbf4;
 }
 
 .product-badge {
