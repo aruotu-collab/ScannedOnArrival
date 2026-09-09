@@ -75,6 +75,16 @@ import { extractImageText } from "./lib/ocr";
 import { consumeSharedFile, isDesktopLayout, isIos, isStandalone } from "./lib/pwa";
 import { buildBackup, downloadBackup, fileLooksLikeBackup, parseBackupFile, restoreBackup } from "./lib/backup";
 import { canShareBackup, sendBackupToAnotherPhone } from "./lib/sync";
+import {
+  authAvailable,
+  getSupabase,
+  onAuthChange,
+  sendMagicLink,
+  signOutUser,
+  stripAuthParamsFromUrl,
+  userEmail,
+  verifyEmailCode,
+} from "./lib/auth";
 import { enableNotifications, listAttention, maybeNotify, type AttentionItem } from "./lib/reminders";
 import { classifySmart } from "./lib/openai";
 import { flattenImageFile } from "./lib/detect";
@@ -424,6 +434,22 @@ export default function App() {
     };
     window.addEventListener("beforeinstallprompt", onPrompt);
     return () => window.removeEventListener("beforeinstallprompt", onPrompt);
+  }, []);
+
+  useEffect(() => {
+    if (!getSupabase()) return;
+    const url = new URL(window.location.href);
+    const error = url.searchParams.get("error_description") || url.searchParams.get("error");
+    if (error) {
+      setToast(error.replace(/\+/g, " "));
+      stripAuthParamsFromUrl();
+    }
+    return onAuthChange((user) => {
+      if (url.searchParams.has("code") && user) {
+        setToast("Signed in");
+        stripAuthParamsFromUrl();
+      }
+    });
   }, []);
 
   useEffect(() => {
@@ -1226,7 +1252,7 @@ export default function App() {
               {(view === "documents" || view === "ready") && "Scan a letter, then tap a category. What’s current, missing, or overdue sits with the file."}
               {view === "tree" && "A filing-cabinet view. Move a file, add a folder, or filter by person. The files can live anywhere."}
               {view === "inbox" && "Letterbox or inbox: both are ways documents arrive. Email stays optional."}
-              {view === "settings" && "The index stays on this phone. Send it to another when you change phones."}
+              {view === "settings" && "The index stays on this phone. Sign in if you want the same index on another device later."}
             </p>
           </div>
         </header>
@@ -4437,6 +4463,152 @@ function RestoreHandoff() {
   );
 }
 
+function AccountCard({ onToast }: { onToast: (msg: string) => void }) {
+  const [email, setEmail] = useState("");
+  const [code, setCode] = useState("");
+  const [signedIn, setSignedIn] = useState("");
+  const [sent, setSent] = useState(false);
+  const [busy, setBusy] = useState<"link" | "code" | "out" | null>(null);
+
+  useEffect(() => {
+    if (!authAvailable()) return;
+    const supabase = getSupabase();
+    if (!supabase) return;
+    void supabase.auth.getSession().then(({ data }) => {
+      setSignedIn(userEmail(data.session?.user ?? null));
+    });
+    return onAuthChange((user) => setSignedIn(userEmail(user)));
+  }, []);
+
+  if (!authAvailable()) {
+    return (
+      <div className="card">
+        <h2>Sign in</h2>
+        <p className="meta">
+          Magic-link sign-in is not wired on this build yet. The index still lives in this browser. Send and
+          Receive still work without an account.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="card">
+      <h2>Sign in</h2>
+      {signedIn ? (
+        <>
+          <p className="meta">
+            Signed in as {signedIn}. This is so a phone and a laptop can share one index later. Papers still live
+            on this device until sync is on.
+          </p>
+          <div className="row" style={{ marginTop: 12 }}>
+            <button
+              type="button"
+              className="secondary"
+              disabled={busy !== null}
+              onClick={() => {
+                void (async () => {
+                  setBusy("out");
+                  try {
+                    await signOutUser();
+                    setSent(false);
+                    setCode("");
+                    onToast("Signed out on this device");
+                  } catch (err) {
+                    onToast(err instanceof Error ? err.message : "Could not sign out.");
+                  } finally {
+                    setBusy(null);
+                  }
+                })();
+              }}
+            >
+              Sign out
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="meta">
+            We email a sign-in link. No password. On a Home Screen app, type the code from that same email if the
+            link opens in the wrong browser.
+          </p>
+          <label className="field" style={{ marginTop: 12 }}>
+            <span>Email</span>
+            <input
+              type="email"
+              autoComplete="email"
+              inputMode="email"
+              placeholder="you@example.com"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+            />
+          </label>
+          <div className="row" style={{ marginTop: 12 }}>
+            <button
+              type="button"
+              className="primary"
+              disabled={busy !== null || !email.includes("@")}
+              onClick={() => {
+                void (async () => {
+                  setBusy("link");
+                  try {
+                    await sendMagicLink(email);
+                    setSent(true);
+                    onToast("Check your email for the sign-in link.");
+                  } catch (err) {
+                    onToast(err instanceof Error ? err.message : "Could not send the sign-in email.");
+                  } finally {
+                    setBusy(null);
+                  }
+                })();
+              }}
+            >
+              {busy === "link" ? "Sending…" : "Email me a sign-in link"}
+            </button>
+          </div>
+          {sent && (
+            <>
+              <label className="field" style={{ marginTop: 12 }}>
+                <span>Or type the code from the email</span>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  placeholder="123456"
+                  value={code}
+                  onChange={(e) => setCode(e.target.value)}
+                />
+              </label>
+              <div className="row" style={{ marginTop: 12 }}>
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={busy !== null || code.trim().length < 6}
+                  onClick={() => {
+                    void (async () => {
+                      setBusy("code");
+                      try {
+                        await verifyEmailCode(email, code);
+                        onToast("Signed in");
+                      } catch (err) {
+                        onToast(err instanceof Error ? err.message : "That code did not work.");
+                      } finally {
+                        setBusy(null);
+                      }
+                    })();
+                  }}
+                >
+                  {busy === "code" ? "Checking…" : "Sign in with the code"}
+                </button>
+              </div>
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function SettingsView({
   settings,
   installPrompt,
@@ -4469,6 +4641,7 @@ function SettingsView({
 
   return (
     <div className="grid">
+      <AccountCard onToast={onToast} />
       <div className="card">
         <h2>A web app in your browser</h2>
         <p className="meta">
