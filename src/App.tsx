@@ -74,6 +74,7 @@ import {
 import { extractImageText } from "./lib/ocr";
 import { consumeSharedFile, isDesktopLayout, isIos, isStandalone } from "./lib/pwa";
 import { buildBackup, downloadBackup, fileLooksLikeBackup, parseBackupFile, restoreBackup } from "./lib/backup";
+import { shareDocument } from "./lib/shareDoc";
 import { canShareBackup, sendBackupToAnotherPhone } from "./lib/sync";
 import {
   authAvailable,
@@ -1518,6 +1519,7 @@ export default function App() {
                       setToast(ok ? "Location copied" : "Could not copy the location.");
                     }}
                     onKeepLocal={(doc, file) => keepReferencedCopy(doc, file)}
+                    onToast={setToast}
                     onDeleted={async (id) => {
                       await deleteDocument(id);
                       setDocuments(documents.filter((d) => d.id !== id));
@@ -2768,6 +2770,7 @@ function DocumentsView({
   onChecked,
   onCopyLocation,
   onKeepLocal,
+  onToast,
   onDeleted,
 }: {
   documents: DocumentRecord[];
@@ -2786,6 +2789,7 @@ function DocumentsView({
   onChecked: (id: string) => void;
   onCopyLocation: (label: string) => void;
   onKeepLocal: (doc: DocumentRecord, file: File) => Promise<void>;
+  onToast: (message: string) => void;
   onDeleted: (id: string) => void;
 }) {
   const catalog = allCategories()
@@ -3049,6 +3053,7 @@ function DocumentsView({
                               onChecked={() => onChecked(doc.id)}
                               onCopyLocation={() => onCopyLocation(doc.locationLabel)}
                               onKeepLocal={(file) => onKeepLocal(doc, file)}
+                              onToast={onToast}
                               onDeleted={() => onDeleted(doc.id)}
                             />
                           </div>
@@ -3110,6 +3115,8 @@ function FileViewer({
   onClose,
   demo,
   primaryAction,
+  onShare,
+  sharing,
 }: {
   title: string;
   pages: Array<{ url: string; image: boolean }>;
@@ -3117,6 +3124,8 @@ function FileViewer({
   onClose: () => void;
   demo?: boolean;
   primaryAction?: { label: string; onClick: () => void };
+  onShare?: () => void;
+  sharing?: boolean;
 }) {
   const [index, setIndex] = useState(startAt);
   const [view, setView] = useState<ViewerPan>(VIEWER_IDENTITY);
@@ -3323,6 +3332,11 @@ function FileViewer({
                 : "Open the file, then pinch to enlarge"}
           </p>
         </div>
+        {onShare && (
+          <button className="secondary" type="button" disabled={sharing} onClick={onShare}>
+            {sharing ? "Sharing…" : "Share"}
+          </button>
+        )}
         {primaryAction && (
           <button className="primary" type="button" onClick={primaryAction.onClick}>
             {primaryAction.label}
@@ -3580,6 +3594,7 @@ function DocumentDetail({
   onChecked,
   onCopyLocation,
   onKeepLocal,
+  onToast,
   onDeleted,
 }: {
   doc: DocumentRecord;
@@ -3590,6 +3605,7 @@ function DocumentDetail({
   onChecked: () => void;
   onCopyLocation: () => void;
   onKeepLocal?: (file: File) => Promise<void>;
+  onToast: (message: string) => void;
   onDeleted: () => void;
 }) {
   const [pages, setPages] = useState<Array<{ url: string; image: boolean }>>([]);
@@ -3599,10 +3615,33 @@ function DocumentDetail({
   const [openedFile, setOpenedFile] = useState<File | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
   const [keeping, setKeeping] = useState(false);
+  const [sharing, setSharing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const previewRevoke = useRef<(() => void) | null>(null);
   const status = computeStatus(doc);
   const link = locationUrl(doc.locationLabel);
+  const canSendFile = doc.storageKind === "stored" || Boolean(openedFile);
+
+  const sendFile = async () => {
+    if (sharing) return;
+    setSharing(true);
+    try {
+      const result = await shareDocument(doc, openedFile);
+      if (result === "downloaded") {
+        onToast("Saved the file. Attach it in Mail, WhatsApp, or anywhere else.");
+      } else if (result === "empty") {
+        onToast(
+          doc.storageKind === "stored"
+            ? "The file is not on this device yet."
+            : "Open the file first, then Share.",
+        );
+      }
+    } catch {
+      onToast("Could not share that file.");
+    } finally {
+      setSharing(false);
+    }
+  };
 
   useEffect(() => {
     let urls: string[] = [];
@@ -3736,6 +3775,8 @@ function DocumentDetail({
           pages={pages}
           startAt={viewerAt}
           onClose={() => setViewerAt(null)}
+          onShare={canSendFile ? () => void sendFile() : undefined}
+          sharing={sharing}
           primaryAction={
             doc.storageKind === "referenced" && openedFile && onKeepLocal
               ? {
@@ -3811,6 +3852,11 @@ function DocumentDetail({
         </p>
       )}
       <div className="doc-detail-actions">
+        {canSendFile && (
+          <button type="button" className="secondary" disabled={sharing} onClick={() => void sendFile()}>
+            {sharing ? "Sharing…" : "Share"}
+          </button>
+        )}
         <button type="button" className="secondary" onClick={onChecked} disabled={isCheckedToday(doc.lastChecked)}>
           {isCheckedToday(doc.lastChecked) ? "Checked today" : "Mark as checked"}
         </button>
