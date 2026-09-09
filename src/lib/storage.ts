@@ -1,4 +1,4 @@
-import type { AppSettings, DocumentRecord, FileBlobRecord, InboxItem } from "../types";
+import type { AppSettings, DeletedRecord, DocumentRecord, FileBlobRecord, InboxItem } from "../types";
 
 const DB_NAME = "scannedonarrival";
 const DB_VERSION = 1;
@@ -49,6 +49,7 @@ export async function saveDocuments(docs: DocumentRecord[]): Promise<void> {
   const db = await openDb();
   const tx = db.transaction("documents", "readwrite");
   const store = tx.objectStore("documents");
+  await reqToPromise(store.clear());
   await Promise.all(docs.map((doc) => reqToPromise(store.put(doc))));
   db.close();
 }
@@ -57,7 +58,31 @@ export function pageBlobId(documentId: string, index: number): string {
   return index <= 0 ? documentId : `${documentId}::p${index}`;
 }
 
+export async function loadDeletedRecords(): Promise<DeletedRecord[]> {
+  const db = await openDb();
+  const tx = db.transaction("meta", "readonly");
+  const row = await reqToPromise(tx.objectStore("meta").get("deleted"));
+  db.close();
+  const value = (row as { key: string; value: DeletedRecord[] } | undefined)?.value;
+  return Array.isArray(value) ? value : [];
+}
+
+export async function saveDeletedRecords(records: DeletedRecord[]): Promise<void> {
+  const db = await openDb();
+  const tx = db.transaction("meta", "readwrite");
+  await reqToPromise(tx.objectStore("meta").put({ key: "deleted", value: records }));
+  db.close();
+}
+
+export async function rememberDeleted(id: string, at = new Date().toISOString()): Promise<DeletedRecord[]> {
+  const current = await loadDeletedRecords();
+  const next = [{ id, deletedAt: at }, ...current.filter((item) => item.id !== id)];
+  await saveDeletedRecords(next);
+  return next;
+}
+
 export async function deleteDocument(id: string): Promise<void> {
+  await rememberDeleted(id);
   const db = await openDb();
   const tx = db.transaction(["documents", "files"], "readwrite");
   const doc = (await reqToPromise(tx.objectStore("documents").get(id))) as DocumentRecord | undefined;

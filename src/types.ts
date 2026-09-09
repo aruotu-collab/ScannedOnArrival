@@ -81,6 +81,12 @@ export interface DocumentRecord {
   supersededBy?: string;
   notes?: string;
   mailboxRef?: string;
+  updatedAt?: string;
+}
+
+export interface DeletedRecord {
+  id: string;
+  deletedAt: string;
 }
 
 export interface FileBlobRecord {

@@ -2661,6 +2661,10 @@ html.nav-css[data-nav-dir="back"] .page-stage {
   margin: 0 0 10px;
 }
 
+.onboarding-card .card {
+  margin-top: 22px;
+}
+
 .choice-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;

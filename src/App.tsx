@@ -87,6 +87,13 @@ import {
   verifyEmailCode,
 } from "./lib/auth";
 import { isAppPath, pathForView, viewFromPath, writeViewUrl } from "./lib/routes";
+import {
+  applyAccountIndex,
+  cloudSettingsFrom,
+  cloudSyncAvailable,
+  isCloudSchemaError,
+  stampDocumentChanges,
+} from "./lib/cloud";
 import { enableNotifications, listAttention, maybeNotify, type AttentionItem } from "./lib/reminders";
 import { classifySmart } from "./lib/openai";
 import { flattenImageFile } from "./lib/detect";
@@ -333,7 +340,11 @@ function defaultLocation(method: SourceKind, storageKind: "stored" | "referenced
 export default function App() {
   const [hydrated, setHydrated] = useState(false);
   const [documents, setDocuments] = useState<DocumentRecord[]>([]);
+  const documentsRef = useRef(documents);
+  documentsRef.current = documents;
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
   const [inbox, setInbox] = useState<InboxItem[]>([]);
   const [foundEmail, setFoundEmail] = useState<FoundEmailDoc[]>([]);
   const [mailboxPreview, setMailboxPreview] = useState<{
@@ -341,6 +352,12 @@ export default function App() {
     pages: Array<{ url: string; image: boolean }>;
   } | null>(null);
   const mailboxFiles = useRef(new Map<string, File>());
+  const [accountEmail, setAccountEmail] = useState("");
+  const accountEmailRef = useRef("");
+  const skipCloudRef = useRef(false);
+  const cloudBusyRef = useRef(false);
+  const cloudTimerRef = useRef(0);
+  const runAccountSyncRef = useRef<(reason: "pull" | "push" | "replace") => Promise<void>>(async () => {});
   const [view, setView] = useState<ViewId>(() => viewFromPath(window.location.pathname));
   const goToViewRef = useRef<(next: ViewId, opts?: { replace?: boolean; fromPop?: boolean }) => void>(() => {});
   const viewRef = useRef(view);
@@ -450,8 +467,11 @@ export default function App() {
       stripAuthParamsFromUrl();
     }
     return onAuthChange((user) => {
+      const email = userEmail(user);
+      accountEmailRef.current = email;
+      setAccountEmail(email);
       if (url.searchParams.has("code") && user) {
-        setToast("Signed in");
+        setToast("Signed in. This index follows this email.");
         stripAuthParamsFromUrl();
       }
     });
@@ -497,7 +517,8 @@ export default function App() {
     }
   }, [hydrated]);
 
-  const persistSettings = async (next: AppSettings) => {
+  const persistSettings = async (next: AppSettings, opts?: { fromCloud?: boolean }) => {
+    const previousCloud = cloudSettingsFrom(settingsRef.current);
     const safe = {
       ...next,
       customCategories: next.customCategories ?? [],
@@ -506,9 +527,72 @@ export default function App() {
       mailboxSkipped: next.mailboxSkipped ?? [],
     };
     setCatalogExtras(safe.customCategories, safe.customTypes);
+    settingsRef.current = safe;
     setSettings(safe);
     await saveSettings(safe);
+    if (!opts?.fromCloud && JSON.stringify(previousCloud) !== JSON.stringify(cloudSettingsFrom(safe))) {
+      scheduleAccountSync();
+    }
   };
+
+  const persistDocs = async (next: DocumentRecord[], opts?: { fromCloud?: boolean }) => {
+    const stamped = opts?.fromCloud ? next : stampDocumentChanges(documentsRef.current, next);
+    documentsRef.current = stamped;
+    setDocuments(stamped);
+    await saveDocuments(stamped);
+    if (!opts?.fromCloud) scheduleAccountSync();
+  };
+
+  const scheduleAccountSync = () => {
+    if (skipCloudRef.current || !accountEmailRef.current || !cloudSyncAvailable()) return;
+    window.clearTimeout(cloudTimerRef.current);
+    cloudTimerRef.current = window.setTimeout(() => {
+      void runAccountSyncRef.current("push");
+    }, 1200);
+  };
+
+  const runAccountSync = async (reason: "pull" | "push" | "replace") => {
+    if (skipCloudRef.current || !accountEmailRef.current || !cloudSyncAvailable() || cloudBusyRef.current) return;
+    cloudBusyRef.current = true;
+    try {
+      const result = await applyAccountIndex(settingsRef.current, documentsRef.current, {
+        replaceRemote: reason === "replace",
+      });
+      if (result.changed) {
+        skipCloudRef.current = true;
+        setCatalogExtras(result.settings.customCategories ?? [], result.settings.customTypes ?? []);
+        documentsRef.current = result.documents;
+        setDocuments(result.documents);
+        await saveDocuments(result.documents);
+        settingsRef.current = result.settings;
+        setSettings(result.settings);
+        await saveSettings(result.settings);
+        skipCloudRef.current = false;
+      }
+      if (reason === "pull" && result.imported) setToast("Index updated from this account");
+    } catch (err) {
+      skipCloudRef.current = false;
+      if (isCloudSchemaError(err)) return;
+      if (reason !== "push") setToast(err instanceof Error ? err.message : "Could not sync this index.");
+    } finally {
+      cloudBusyRef.current = false;
+    }
+  };
+  runAccountSyncRef.current = runAccountSync;
+
+  useEffect(() => {
+    if (!hydrated || !accountEmail) return;
+    void runAccountSyncRef.current("pull");
+    const onVis = () => {
+      if (document.visibilityState === "visible") void runAccountSyncRef.current("pull");
+    };
+    document.addEventListener("visibilitychange", onVis);
+    const tick = window.setInterval(() => void runAccountSyncRef.current("pull"), 60000);
+    return () => {
+      document.removeEventListener("visibilitychange", onVis);
+      window.clearInterval(tick);
+    };
+  }, [hydrated, accountEmail]);
 
   const restoreFromFile = async (file: File): Promise<boolean> => {
     if (!window.confirm("Receive this index? It replaces everything on this browser.")) return false;
@@ -525,15 +609,18 @@ export default function App() {
         inboxAddress: ensureInboxAddress(restored.settings.inboxAddress),
       };
       setCatalogExtras(nextSettings.customCategories, nextSettings.customTypes);
+      documentsRef.current = restored.documents;
+      settingsRef.current = nextSettings;
       setDocuments(restored.documents);
       setSettings(nextSettings);
       setInbox(withoutSampleInbox(restored.inbox));
       if (nextSettings.inboxAddress !== restored.settings.inboxAddress) {
-        await persistSettings(nextSettings);
+        await persistSettings(nextSettings, { fromCloud: true });
       }
       setFoundEmail([]);
       setReceiveHint(false);
       setToast(`Restored ${restored.documents.length} documents`);
+      if (accountEmailRef.current) void runAccountSyncRef.current("replace");
       return true;
     } catch (err) {
       setToast(err instanceof Error ? err.message : "Could not restore that backup.");
@@ -624,11 +711,6 @@ export default function App() {
       people: (settings.people ?? []).filter((person) => person.id !== id),
     });
     if (personFilter === id) setPersonFilter("all");
-  };
-
-  const persistDocs = async (next: DocumentRecord[]) => {
-    setDocuments(next);
-    await saveDocuments(next);
   };
 
   const persistInbox = async (next: InboxItem[]) => {
@@ -1177,54 +1259,64 @@ export default function App() {
 
   if (!hydrated) {
     return (
-      <div className="onboarding">
-        <div className="onboarding-card">
-          <ProductBadge />
-          <p className="kicker">ScannedOnArrival</p>
-          <h1>Opening your document index…</h1>
+      <>
+        <div className="onboarding">
+          <div className="onboarding-card">
+            <ProductBadge />
+            <p className="kicker">ScannedOnArrival</p>
+            <h1>Opening your document index…</h1>
+          </div>
         </div>
-      </div>
+        {toast && <div className="toast">{toast}</div>}
+      </>
     );
   }
 
   if (!settings.onboardingComplete) {
     return (
-      <div className="onboarding">
-        <div className="onboarding-card">
-          <ProductBadge />
-          <p className="kicker">Document readiness</p>
-          <h1>ScannedOnArrival</h1>
-          <p>
+      <>
+        <div className="onboarding">
+          <div className="onboarding-card">
+            <ProductBadge />
+            <p className="kicker">Document readiness</p>
+            <h1>ScannedOnArrival</h1>
+            <p>
           This is a web app — open it in Safari or Chrome. It is not an App Store app; you can add it to
           your Home Screen if you want. When we say scan, we mean point your phone at the paper, in this
           browser tab.
         </p>
-          <div className="fact-row">
-            <div className="fact">
-              <strong>Scan = your phone</strong>
-              <span>Use this page’s camera to photograph a letter, bill or passport. Not a desktop scanner.</span>
+            <div className="fact-row">
+              <div className="fact">
+                <strong>Scan = your phone</strong>
+                <span>Use this page’s camera to photograph a letter, bill or passport. Not a desktop scanner.</span>
+              </div>
+              <div className="fact">
+                <strong>Runs in your browser</strong>
+                <span>On a computer you can browse the index and upload PDFs. To scan paper, open this same site on your phone.</span>
+              </div>
             </div>
-            <div className="fact">
-              <strong>Runs in your browser</strong>
-              <span>On a computer you can browse the index and upload PDFs. To scan paper, open this same site on your phone.</span>
+            <div className="choice-grid">
+              <button className="method" onClick={startEmpty}>
+                <strong>Start private and empty</strong>
+                <span>Scan with your phone, upload a PDF, or reference a file. Everything stays on this device.</span>
+              </button>
+              <button className="method" onClick={startDemo}>
+                <strong>See a household example</strong>
+                <span>Load sample Council Tax, insurance, passport and statements so you can explore the views.</span>
+              </button>
+              <button className="method featured" onClick={startTryDemo}>
+                <strong>Try a 30-second demo</strong>
+                <span>Watch a sample letter get scanned, then see it land under Council Tax. No paper needed.</span>
+              </button>
             </div>
-          </div>
-          <div className="choice-grid">
-            <button className="method" onClick={startEmpty}>
-              <strong>Start private and empty</strong>
-              <span>Scan with your phone, upload a PDF, or reference a file. Everything stays on this device.</span>
-            </button>
-            <button className="method" onClick={startDemo}>
-              <strong>See a household example</strong>
-              <span>Load sample Council Tax, insurance, passport and statements so you can explore the views.</span>
-            </button>
-            <button className="method featured" onClick={startTryDemo}>
-              <strong>Try a 30-second demo</strong>
-              <span>Watch a sample letter get scanned, then see it land under Council Tax. No paper needed.</span>
-            </button>
+            <AccountCard
+              onToast={setToast}
+              intro="Already using this on another phone or computer? Sign in to bring that index here. We email a link — no password."
+            />
           </div>
         </div>
-      </div>
+        {toast && <div className="toast">{toast}</div>}
+      </>
     );
   }
 
@@ -1289,7 +1381,7 @@ export default function App() {
               {(view === "documents" || view === "ready") && "Scan a letter, then tap a category. What’s current, missing, or overdue sits with the file."}
               {view === "tree" && "A filing-cabinet view. Move a file, add a folder, or filter by person. The files can live anywhere."}
               {view === "inbox" && "Letterbox or inbox: both are ways documents arrive. Email stays optional."}
-              {view === "settings" && "The index stays on this phone. Send it to another when you change phones."}
+              {view === "settings" && "Sign in so another phone can share this index, or send a file."}
             </p>
           </div>
         </header>
@@ -1447,6 +1539,7 @@ export default function App() {
           {view === "settings" && (
             <SettingsView
               settings={settings}
+              signedIn={accountEmail}
               installPrompt={installPrompt}
               onInstalled={() => setInstallPrompt(null)}
               onSettings={persistSettings}
@@ -1481,6 +1574,10 @@ export default function App() {
                 await restoreFromFile(file);
               }}
               onReset={async () => {
+                if (accountEmail) {
+                  setToast("Sign out first if you do not want this account’s index to come back.");
+                  return;
+                }
                 await clearAllData();
                 setDocuments([]);
                 setInbox([]);
@@ -4581,7 +4678,7 @@ function AppNameplate({ onToast }: { onToast: (msg: string) => void }) {
   );
 }
 
-function AccountCard({ onToast }: { onToast: (msg: string) => void }) {
+function AccountCard({ onToast, intro }: { onToast: (msg: string) => void; intro?: string }) {
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
   const [signedIn, setSignedIn] = useState("");
@@ -4616,8 +4713,8 @@ function AccountCard({ onToast }: { onToast: (msg: string) => void }) {
       {signedIn ? (
         <>
           <p className="meta">
-            Signed in as {signedIn}. This is so a phone and a laptop can share one index later. Papers still live
-            on this device until sync is on.
+            Signed in as {signedIn}. Listings and stored copies follow this email on other phones and computers
+            that sign in with it. Send and Receive still work if the other device is not signed in.
           </p>
           <div className="row" style={{ marginTop: 12 }}>
             <button
@@ -4647,8 +4744,8 @@ function AccountCard({ onToast }: { onToast: (msg: string) => void }) {
       ) : (
         <>
           <p className="meta">
-            We email a sign-in link. No password. On a Home Screen app, type the code from that same email if the
-            link opens in the wrong browser.
+            {intro ??
+              "We email a sign-in link. No password. On a Home Screen app, type the code from that same email if the link opens in the wrong browser."}
           </p>
           <label className="field" style={{ marginTop: 12 }}>
             <span>Email</span>
@@ -4729,6 +4826,7 @@ function AccountCard({ onToast }: { onToast: (msg: string) => void }) {
 
 function SettingsView({
   settings,
+  signedIn,
   installPrompt,
   onInstalled,
   onSettings,
@@ -4742,6 +4840,7 @@ function SettingsView({
   receiveHint,
 }: {
   settings: AppSettings;
+  signedIn: string;
   installPrompt: BeforeInstallPromptEvent | null;
   onInstalled: () => void;
   onSettings: (s: AppSettings) => Promise<void>;
@@ -4870,8 +4969,9 @@ function SettingsView({
       <div className="card">
         <h2>This phone and another</h2>
         <p className="meta">
-          The index lives in this browser. Phones do not stay in sync on their own yet. Send this index to the other
-          phone — AirDrop, Messages, or Files — then Receive it there. That replaces the index on that phone.
+          {signedIn
+            ? `Signed in as ${signedIn}. Listings and stored copies follow this email. Send a file if the other phone is not signed in yet.`
+            : "The index lives in this browser until you sign in. Send this index to the other phone — AirDrop, Messages, or Files — then Receive it there. That replaces the index on that phone. Or sign in on both devices to keep one index."}
         </p>
         {receiveHint && <p className="sync-receive-note">Pick the backup you sent from the other phone.</p>}
         <div className="row" style={{ marginTop: 12 }}>
@@ -4903,7 +5003,10 @@ function SettingsView({
       </div>
       <div className="card">
         <h3>This device</h3>
-        <p className="meta">Clear local documents, files and settings from IndexedDB on this browser.</p>
+        <p className="meta">
+          Clear documents, files and settings from this browser. If you are signed in, sign out first or the
+          account copy will come back.
+        </p>
         <button className="danger" onClick={onReset}>
           Clear local data
         </button>
