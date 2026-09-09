@@ -183,6 +183,13 @@ button {
   flex-shrink: 0;
 }
 
+.sign-in-sent {
+  margin: 10px 0 0;
+  color: var(--moss);
+  font-weight: 650;
+  font-size: 0.88rem;
+}
+
 .account-menu-back {
   position: fixed;
   inset: 0;

@@ -5003,6 +5003,9 @@ function AccountCard({
           </div>
           {sent && (
             <>
+              <p className="sign-in-sent" role="status">
+                the link has been sent
+              </p>
               <label className="field" style={{ marginTop: 12 }}>
                 <span>Or type the code from the email</span>
                 <input
