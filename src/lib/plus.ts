@@ -134,11 +134,12 @@ export async function startPlusPortal(): Promise<void> {
   if (!token) throw new Error("Sign in first.");
   const response = await fetch("/api/plus/portal", {
     method: "POST",
+    cache: "no-store",
     headers: { Authorization: `Bearer ${token}` },
   });
   const body = (await response.json().catch(() => ({}))) as { url?: string; error?: string };
   if (!response.ok || !body.url) throw new Error(body.error || "Could not open Plus billing.");
-  window.location.href = body.url;
+  window.location.assign(body.url);
 }
 
 export function seedTrackedTypes(documents: { typeId: string; isCurrent?: boolean }[], existing: string[] | undefined): string[] {

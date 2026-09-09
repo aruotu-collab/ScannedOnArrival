@@ -5130,12 +5130,9 @@ function AppNameplate({
           <MenuGlyph open={open} />
           {hello ? <span className="account-hello">Hi {hello}</span> : null}
         </button>
-        <div
-          className="account-menu"
-          id="account-menu"
-          hidden={!open}
-          onClick={(event) => event.stopPropagation()}
-        >
+      </div>
+      {open && (
+        <div className="account-menu" id="account-menu">
           <AccountCard
             onToast={onToast}
             shareWithDevices={shareWithDevices}
@@ -5147,7 +5144,7 @@ function AppNameplate({
             onStartPlus={onStartPlus}
           />
         </div>
-      </div>
+      )}
     </>
   );
 }
@@ -5178,6 +5175,7 @@ function AccountCard({
   const [signedIn, setSignedIn] = useState("");
   const [sent, setSent] = useState(false);
   const [busy, setBusy] = useState<"link" | "code" | "out" | "invite" | "join" | "leave" | string | null>(null);
+  const [billingError, setBillingError] = useState<string | null>(null);
   const [household, setHousehold] = useState<HouseholdState | null>(null);
   const [joinCode, setJoinCode] = useState(() => pendingInviteCode());
   const [confirm, setConfirm] = useState<"leave" | { removeId: string; email: string } | null>(null);
@@ -5245,14 +5243,16 @@ function AccountCard({
                   type="button"
                   className="secondary"
                   disabled={busy !== null}
-                  onClick={(event) => {
-                    event.stopPropagation();
+                  onClick={() => {
                     void (async () => {
+                      setBillingError(null);
                       setBusy("plus");
                       try {
                         await startPlusPortal();
                       } catch (err) {
-                        onToast(err instanceof Error ? err.message : "Could not open Plus billing.");
+                        const message = err instanceof Error ? err.message : "Could not open Plus billing.";
+                        setBillingError(message);
+                        onToast(message);
                       } finally {
                         setBusy(null);
                       }
@@ -5267,6 +5267,11 @@ function AccountCard({
                 </button>
               ) : null}
             </div>
+          )}
+          {billingError && (
+            <p className="meta" role="status" style={{ marginTop: 10, color: "#8b2e1f" }}>
+              {billingError}
+            </p>
           )}
           {onShareWithDevices && !member && (
             <div className="share-devices">
