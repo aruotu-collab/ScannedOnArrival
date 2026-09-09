@@ -111,6 +111,70 @@ button {
   color: inherit;
 }
 
+.account-menu-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin: 0 -4px 0 auto;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+}
+
+.account-menu-btn:hover,
+.account-menu-btn[aria-expanded="true"] {
+  background: rgba(255, 251, 244, 0.12);
+}
+
+.account-menu-glyph {
+  display: block;
+  width: 18px;
+  height: 18px;
+}
+
+.account-menu-back {
+  position: fixed;
+  inset: 0;
+  z-index: 29;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: rgba(27, 25, 20, 0.32);
+  cursor: pointer;
+}
+
+.account-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 8px;
+  left: auto;
+  width: min(400px, calc(100vw - 16px));
+  z-index: 1;
+  margin: 0;
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: 1rem;
+  font-weight: 400;
+  letter-spacing: -0.01em;
+  line-height: 1.45;
+  text-align: left;
+  text-transform: none;
+}
+
+.account-menu[hidden] {
+  display: none;
+}
+
+.account-menu .card {
+  margin: 0;
+  box-shadow: var(--shadow);
+}
+
 .sidebar {
   background: var(--forest);
   color: #f4efe4;
@@ -2343,7 +2407,7 @@ html.nav-css[data-nav-dir="back"] .page-stage {
   color: #f7f1e4;
   padding: 12px 16px;
   border-radius: 999px;
-  z-index: 30;
+  z-index: 40;
 }
 
 .mobile-nav {
@@ -2598,6 +2662,23 @@ html.nav-css[data-nav-dir="back"] .page-stage {
   .app-nameplate .scan-cta-glyph {
     width: 24px;
     height: 24px;
+  }
+
+  .account-menu-btn {
+    width: 40px;
+    height: 40px;
+    margin-right: -8px;
+  }
+
+  .account-menu-glyph {
+    width: 22px;
+    height: 22px;
+  }
+
+  .account-menu {
+    left: 12px;
+    right: 12px;
+    width: auto;
   }
 
   :root {

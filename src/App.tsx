@@ -1200,10 +1200,7 @@ export default function App() {
 
   return (
     <div className={`app${view === "demo" || demoLanding ? " demo-mode" : ""}`}>
-      <p className="app-nameplate">
-        <PhoneGlyph />
-        <span>ScannedOnArrival</span>
-      </p>
+      <AppNameplate onToast={setToast} />
       <aside className="sidebar">
         <div className="wordmark">
           <ProductBadge tone="dark" />
@@ -1252,7 +1249,7 @@ export default function App() {
               {(view === "documents" || view === "ready") && "Scan a letter, then tap a category. What’s current, missing, or overdue sits with the file."}
               {view === "tree" && "A filing-cabinet view. Move a file, add a folder, or filter by person. The files can live anywhere."}
               {view === "inbox" && "Letterbox or inbox: both are ways documents arrive. Email stays optional."}
-              {view === "settings" && "The index stays on this phone. Sign in if you want the same index on another device later."}
+              {view === "settings" && "The index stays on this phone. Send it to another when you change phones."}
             </p>
           </div>
         </header>
@@ -4463,6 +4460,78 @@ function RestoreHandoff() {
   );
 }
 
+function MenuGlyph({ open }: { open: boolean }) {
+  if (open) {
+    return (
+      <svg className="account-menu-glyph" viewBox="0 0 24 24" aria-hidden="true">
+        <path
+          fill="currentColor"
+          d="M6.2 5.1 12 10.9l5.8-5.8 1.1 1.1L13.1 12l5.8 5.8-1.1 1.1L12 13.1l-5.8 5.8-1.1-1.1L10.9 12 5.1 6.2l1.1-1.1Z"
+        />
+      </svg>
+    );
+  }
+  return (
+    <svg className="account-menu-glyph" viewBox="0 0 24 24" aria-hidden="true">
+      <path fill="currentColor" d="M4 6h16v2.1H4V6Zm0 5h16v2.1H4V11Zm0 5h16v2.1H4V16Z" />
+    </svg>
+  );
+}
+
+function AppNameplate({ onToast }: { onToast: (msg: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [signedIn, setSignedIn] = useState("");
+
+  useEffect(() => {
+    if (!authAvailable()) return;
+    const supabase = getSupabase();
+    if (!supabase) return;
+    void supabase.auth.getSession().then(({ data }) => {
+      setSignedIn(userEmail(data.session?.user ?? null));
+    });
+    return onAuthChange((user) => setSignedIn(userEmail(user)));
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
+
+  return (
+    <>
+      {open && (
+        <button
+          type="button"
+          className="account-menu-back"
+          aria-label="Close sign in"
+          onClick={() => setOpen(false)}
+        />
+      )}
+      <div className="app-nameplate">
+        <PhoneGlyph />
+        <span>ScannedOnArrival</span>
+        <button
+          type="button"
+          className="account-menu-btn"
+          aria-expanded={open}
+          aria-controls="account-menu"
+          aria-label={signedIn ? "Account" : "Sign in"}
+          onClick={() => setOpen((current) => !current)}
+        >
+          <MenuGlyph open={open} />
+        </button>
+        <div className="account-menu" id="account-menu" hidden={!open}>
+          <AccountCard onToast={onToast} />
+        </div>
+      </div>
+    </>
+  );
+}
+
 function AccountCard({ onToast }: { onToast: (msg: string) => void }) {
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
@@ -4641,7 +4710,6 @@ function SettingsView({
 
   return (
     <div className="grid">
-      <AccountCard onToast={onToast} />
       <div className="card">
         <h2>A web app in your browser</h2>
         <p className="meta">
@@ -4753,9 +4821,8 @@ function SettingsView({
       <div className="card">
         <h2>This phone and another</h2>
         <p className="meta">
-          The index lives in this browser. There is no account yet, so phones do not stay in sync on their own.
-          Send this index to the other phone — AirDrop, Messages, or Files — then Receive it there. That replaces
-          the index on that phone.
+          The index lives in this browser. Phones do not stay in sync on their own yet. Send this index to the other
+          phone — AirDrop, Messages, or Files — then Receive it there. That replaces the index on that phone.
         </p>
         {receiveHint && <p className="sync-receive-note">Pick the backup you sent from the other phone.</p>}
         <div className="row" style={{ marginTop: 12 }}>
