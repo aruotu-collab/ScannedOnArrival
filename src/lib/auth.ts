@@ -32,7 +32,9 @@ export function getSupabase(): SupabaseClient | null {
 
 export function authRedirectTo(): string {
   const path = isAppPath(window.location.pathname) ? pathForView(viewFromPath(window.location.pathname)) : "/";
-  return `${window.location.origin}${path}`;
+  const invite = new URL(window.location.href).searchParams.get("invite")?.trim();
+  const suffix = invite ? `?invite=${encodeURIComponent(invite)}` : "";
+  return `${window.location.origin}${path}${suffix}`;
 }
 
 export async function sendMagicLink(email: string): Promise<void> {

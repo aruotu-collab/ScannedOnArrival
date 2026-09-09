@@ -226,6 +226,56 @@ button {
 .account-menu .card {
   margin: 0;
   box-shadow: var(--shadow);
+  max-height: min(80vh, 640px);
+  overflow: auto;
+}
+
+.household-share {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.household-share > .meta strong {
+  color: var(--ink);
+}
+
+.household-people {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.household-people li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 0.88rem;
+}
+
+.household-code {
+  margin-top: 10px;
+}
+
+.household-code strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 1.35rem;
+  letter-spacing: 0.14em;
+}
+
+.household-share .text-btn {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--moss);
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
 }
 
 .sidebar {

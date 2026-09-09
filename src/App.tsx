@@ -77,6 +77,16 @@ import { buildBackup, downloadBackup, fileLooksLikeBackup, parseBackupFile, rest
 import { shareDocument } from "./lib/shareDoc";
 import { canShareBackup, sendBackupToAnotherPhone } from "./lib/sync";
 import {
+  acceptHouseholdInvite,
+  createHouseholdInvite,
+  leaveHousehold,
+  loadHousehold,
+  pendingInviteCode,
+  removeHouseholdMember,
+  shareHouseholdInvite,
+  type HouseholdState,
+} from "./lib/householdCloud";
+import {
   authAvailable,
   getSupabase,
   onAuthChange,
@@ -1355,6 +1365,7 @@ export default function App() {
             <AccountCard
               onToast={setToast}
               intro="Already using this on another phone or computer? Sign in to bring that index here. We email a link — no password."
+              onHouseholdChanged={() => void runAccountSyncRef.current("pull")}
             />
           </div>
         </div>
@@ -1369,6 +1380,7 @@ export default function App() {
         onToast={setToast}
         shareWithDevices={shareWithDevices}
         onShareWithDevices={(enabled) => void changeShareWithDevices(enabled)}
+        onHouseholdChanged={() => void runAccountSyncRef.current("pull")}
       />
       <aside className="sidebar">
         <div className="wordmark">
@@ -4845,12 +4857,14 @@ function AppNameplate({
   onToast,
   shareWithDevices,
   onShareWithDevices,
+  onHouseholdChanged,
 }: {
   onToast: (msg: string) => void;
   shareWithDevices: boolean;
   onShareWithDevices: (enabled: boolean) => void;
+  onHouseholdChanged: () => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(() => Boolean(pendingInviteCode()));
   const [signedIn, setSignedIn] = useState("");
 
   useEffect(() => {
@@ -4903,6 +4917,7 @@ function AppNameplate({
             onToast={onToast}
             shareWithDevices={shareWithDevices}
             onShareWithDevices={onShareWithDevices}
+            onHouseholdChanged={onHouseholdChanged}
           />
         </div>
       </div>
@@ -4915,17 +4930,30 @@ function AccountCard({
   intro,
   shareWithDevices,
   onShareWithDevices,
+  onHouseholdChanged,
 }: {
   onToast: (msg: string) => void;
   intro?: string;
   shareWithDevices?: boolean;
   onShareWithDevices?: (enabled: boolean) => void;
+  onHouseholdChanged?: () => void;
 }) {
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
   const [signedIn, setSignedIn] = useState("");
   const [sent, setSent] = useState(false);
-  const [busy, setBusy] = useState<"link" | "code" | "out" | null>(null);
+  const [busy, setBusy] = useState<"link" | "code" | "out" | "invite" | "join" | "leave" | string | null>(null);
+  const [household, setHousehold] = useState<HouseholdState | null>(null);
+  const [joinCode, setJoinCode] = useState(() => pendingInviteCode());
+  const [confirm, setConfirm] = useState<"leave" | { removeId: string; email: string } | null>(null);
+
+  const refreshHousehold = async () => {
+    try {
+      setHousehold(await loadHousehold());
+    } catch {
+      setHousehold(null);
+    }
+  };
 
   useEffect(() => {
     if (!authAvailable()) return;
@@ -4936,6 +4964,14 @@ function AccountCard({
     });
     return onAuthChange((user) => setSignedIn(userEmail(user)));
   }, []);
+
+  useEffect(() => {
+    if (!signedIn) {
+      setHousehold(null);
+      return;
+    }
+    void refreshHousehold();
+  }, [signedIn]);
 
   if (!authAvailable()) {
     return (
@@ -4949,17 +4985,23 @@ function AccountCard({
     );
   }
 
+  const owner = household?.role === "owner";
+  const member = household?.role === "member";
+  const ownerEmail = household?.members.find((item) => item.role === "owner")?.email;
+  const otherMembers = (household?.members ?? []).filter((item) => item.role === "member");
+  const invite = household?.invite;
+
   return (
     <div className="card">
       <h2>Sign in</h2>
       {signedIn ? (
         <>
           <p className="meta">
-            Signed in as {signedIn}. When sharing is on, another phone or computer that signs in with this email
-            copies the listings and stored scans. When it is off, they do not. Send and Receive still work either
-            way.
+            {member
+              ? `Signed in as ${signedIn}. You share this index with ${ownerEmail || "the household"}. Papers you add here show up for them too. Inbox and Gmail stay on this device.`
+              : `Signed in as ${signedIn}. When sharing is on, another phone or computer that signs in with this email copies the listings and stored scans. Invite someone with a different email to share the household index.`}
           </p>
-          {onShareWithDevices && (
+          {onShareWithDevices && !member && (
             <div className="share-devices">
               <p className="meta">Sync to Other devices</p>
               <div className="switch" role="group" aria-label="Sync to Other devices">
@@ -4982,6 +5024,140 @@ function AccountCard({
               </div>
             </div>
           )}
+          <div className="household-share">
+            <p className="meta">
+              <strong>Household</strong>
+            </p>
+            {member ? (
+              <>
+                <p className="meta">Leave if you no longer want to share this index. Your copy on this phone stays.</p>
+                <div className="row" style={{ marginTop: 10 }}>
+                  <button
+                    type="button"
+                    className="danger"
+                    disabled={busy !== null}
+                    onClick={() => setConfirm("leave")}
+                  >
+                    Leave this household
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                {otherMembers.length > 0 && (
+                  <ul className="household-people">
+                    {otherMembers.map((item) => (
+                      <li key={item.userId}>
+                        <span>{item.email || "Someone in this household"}</span>
+                        {owner && (
+                          <button
+                            type="button"
+                            className="text-btn"
+                            disabled={busy !== null}
+                            onClick={() => setConfirm({ removeId: item.userId, email: item.email })}
+                          >
+                            Remove
+                          </button>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {invite ? (
+                  <div className="household-code">
+                    <p className="meta">They sign in with their email, then type this code:</p>
+                    <strong>{invite.code}</strong>
+                    <div className="row" style={{ marginTop: 10 }}>
+                      <button
+                        type="button"
+                        className="primary"
+                        disabled={busy !== null}
+                        onClick={() => {
+                          void (async () => {
+                            setBusy("invite");
+                            try {
+                              const result = await shareHouseholdInvite(invite.code);
+                              onToast(
+                                result === "shared"
+                                  ? "Pick Mail, WhatsApp, or Messages."
+                                  : "Invite copied. Send it to them.",
+                              );
+                            } catch (err) {
+                              if (err instanceof DOMException && err.name === "AbortError") return;
+                              onToast(err instanceof Error ? err.message : "Could not share the invite.");
+                            } finally {
+                              setBusy(null);
+                            }
+                          })();
+                        }}
+                      >
+                        Share the code
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="row" style={{ marginTop: 10 }}>
+                    <button
+                      type="button"
+                      className="secondary"
+                      disabled={busy !== null}
+                      onClick={() => {
+                        void (async () => {
+                          setBusy("invite");
+                          try {
+                            await createHouseholdInvite();
+                            await refreshHousehold();
+                            onToast("Share that code. It works for 7 days.");
+                          } catch (err) {
+                            onToast(err instanceof Error ? err.message : "Could not make an invite.");
+                          } finally {
+                            setBusy(null);
+                          }
+                        })();
+                      }}
+                    >
+                      {busy === "invite" ? "Making a code…" : "Invite someone"}
+                    </button>
+                  </div>
+                )}
+                <label className="field" style={{ marginTop: 14 }}>
+                  <span>Or join with a code</span>
+                  <input
+                    type="text"
+                    autoCapitalize="characters"
+                    autoComplete="off"
+                    placeholder="AB12CD"
+                    value={joinCode}
+                    onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
+                  />
+                </label>
+                <div className="row" style={{ marginTop: 10 }}>
+                  <button
+                    type="button"
+                    className="secondary"
+                    disabled={busy !== null || joinCode.trim().length < 6}
+                    onClick={() => {
+                      void (async () => {
+                        setBusy("join");
+                        try {
+                          await acceptHouseholdInvite(joinCode);
+                          await refreshHousehold();
+                          onHouseholdChanged?.();
+                          onToast("You now share this household index.");
+                        } catch (err) {
+                          onToast(err instanceof Error ? err.message : "That invite code did not work.");
+                        } finally {
+                          setBusy(null);
+                        }
+                      })();
+                    }}
+                  >
+                    {busy === "join" ? "Joining…" : "Join this household"}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
           <div className="row" style={{ marginTop: 12 }}>
             <button
               type="button"
@@ -4994,6 +5170,7 @@ function AccountCard({
                     await signOutUser();
                     setSent(false);
                     setCode("");
+                    setHousehold(null);
                     onToast("Signed out on this device");
                   } catch (err) {
                     onToast(err instanceof Error ? err.message : "Could not sign out.");
@@ -5006,12 +5183,62 @@ function AccountCard({
               Sign out
             </button>
           </div>
+          {confirm === "leave" && (
+            <ConfirmDialog
+              title="Leave this household?"
+              message="You will stop sharing this index. The copy already on this phone stays. They keep their copy."
+              confirmLabel="Leave this household"
+              onCancel={() => setConfirm(null)}
+              onConfirm={() => {
+                setConfirm(null);
+                void (async () => {
+                  setBusy("leave");
+                  try {
+                    await leaveHousehold();
+                    await refreshHousehold();
+                    onHouseholdChanged?.();
+                    onToast("You left the household. This phone kept its copy.");
+                  } catch (err) {
+                    onToast(err instanceof Error ? err.message : "Could not leave the household.");
+                  } finally {
+                    setBusy(null);
+                  }
+                })();
+              }}
+            />
+          )}
+          {confirm && confirm !== "leave" && (
+            <ConfirmDialog
+              title="Remove this person?"
+              message={`Stop sharing this index with ${confirm.email || "this person"}? Their phone keeps its copy.`}
+              confirmLabel="Remove"
+              onCancel={() => setConfirm(null)}
+              onConfirm={() => {
+                const id = confirm.removeId;
+                setConfirm(null);
+                void (async () => {
+                  setBusy(`remove:${id}`);
+                  try {
+                    await removeHouseholdMember(id);
+                    await refreshHousehold();
+                    onToast("They no longer share this household index.");
+                  } catch (err) {
+                    onToast(err instanceof Error ? err.message : "Could not remove that person.");
+                  } finally {
+                    setBusy(null);
+                  }
+                })();
+              }}
+            />
+          )}
         </>
       ) : (
         <>
           <p className="meta">
-            {intro ??
-              "We email a sign-in link. No password. On a Home Screen app, type the code from that same email if the link opens in the wrong browser."}
+            {pendingInviteCode()
+              ? "Sign in with your email, then type the household code to join their index."
+              : intro ??
+                "We email a sign-in link. No password. On a Home Screen app, type the code from that same email if the link opens in the wrong browser."}
           </p>
           <label className="field" style={{ marginTop: 12 }}>
             <span>Email</span>

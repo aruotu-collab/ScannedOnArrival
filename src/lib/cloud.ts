@@ -142,13 +142,22 @@ async function signedInUserId(): Promise<string | null> {
   return data.session?.user.id ?? null;
 }
 
+export async function indexOwnerUserId(): Promise<string | null> {
+  const supabase = getSupabase();
+  const userId = await signedInUserId();
+  if (!supabase || !userId) return null;
+  const { data, error } = await supabase.rpc("my_household_id");
+  if (error) return userId;
+  return typeof data === "string" && data ? data : userId;
+}
+
 export function cloudSyncAvailable(): boolean {
   return Boolean(getSupabase());
 }
 
 export async function loadCloudIndex(): Promise<CloudRow | null> {
   const supabase = getSupabase();
-  const userId = await signedInUserId();
+  const userId = await indexOwnerUserId();
   if (!supabase || !userId) return null;
   const { data, error } = await supabase
     .from("user_indexes")
@@ -175,7 +184,7 @@ export async function loadCloudIndex(): Promise<CloudRow | null> {
 
 export async function saveCloudIndex(payload: CloudPayload): Promise<string> {
   const supabase = getSupabase();
-  const userId = await signedInUserId();
+  const userId = await indexOwnerUserId();
   if (!supabase || !userId) throw new Error("Sign in to sync this index.");
   const updatedAt = stamp();
   const { error } = await supabase.from("user_indexes").upsert({
@@ -249,13 +258,15 @@ export async function applyAccountIndex(
   options: { replaceRemote?: boolean } = {},
 ): Promise<ApplyResult> {
   const userId = await signedInUserId();
-  if (!userId) {
+  const ownerId = await indexOwnerUserId();
+  if (!userId || !ownerId) {
     return { documents: localDocuments, settings: localSettings, changed: false, imported: false };
   }
 
   const local = await localCloudPayload(localSettings, localDocuments);
   const remote = await loadCloudIndex();
-  if (remote && remote.settings.shareWithDevices === false) {
+  const householdMember = userId !== ownerId;
+  if (!householdMember && remote && remote.settings.shareWithDevices === false) {
     return { documents: localDocuments, settings: localSettings, changed: false, imported: false };
   }
   const merged = options.replaceRemote || !remote ? local : mergeIndexes(local, remote);
@@ -278,9 +289,9 @@ export async function applyAccountIndex(
   if (!remote || !sameDocs || deletedChanged || options.replaceRemote) {
     await saveCloudIndex(merged);
   }
-  await uploadStoredFiles(userId, merged.documents);
-  await downloadStoredFiles(userId, merged.documents);
-  if (options.replaceRemote) await removeStoredFiles(userId, merged.deleted);
+  await uploadStoredFiles(ownerId, merged.documents);
+  await downloadStoredFiles(ownerId, merged.documents);
+  if (options.replaceRemote) await removeStoredFiles(ownerId, merged.deleted);
 
   const localIds = new Set(localDocuments.map((doc) => doc.id));
   return {
@@ -311,5 +322,5 @@ export async function writeShareWithDevices(
 
 export function isCloudSchemaError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return /user_indexes|schema cache|does not exist|Could not find the table/i.test(message);
+  return /user_indexes|household_members|household_invites|household_snapshot|my_household_id|schema cache|does not exist|Could not find the table/i.test(message);
 }
