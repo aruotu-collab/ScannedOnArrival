@@ -10,6 +10,8 @@ interface ImportMetaEnv {
 }
 
 interface Window {
+  dataLayer?: unknown[];
+  gtag?: (...args: unknown[]) => void;
   launchQueue?: {
     setConsumer: (callback: (params: { files: Array<{ getFile: () => Promise<File> }> }) => void) => void;
   };

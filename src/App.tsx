@@ -116,6 +116,7 @@ import {
   userEmail,
   verifyEmailCode,
 } from "./lib/auth";
+import { pageTitleForView, trackPage } from "./lib/analytics";
 import { isAppPath, pathForView, viewFromPath, writeViewUrl } from "./lib/routes";
 import {
   applyAccountIndex,
@@ -1077,6 +1078,7 @@ export default function App() {
     const apply = () => {
       flushSync(() => setView(target));
       if (!opts?.fromPop) writeViewUrl(target, opts?.replace ? "replace" : "push");
+      trackPage(pathForView(target), pageTitleForView(target));
       documentsScroller().scrollTo({ top: 0, left: 0, behavior: "auto" });
     };
 

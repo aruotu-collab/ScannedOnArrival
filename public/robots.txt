@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /inbox
+Disallow: /settings
+
+Sitemap: https://www.scannedonarrival.com/sitemap.xml
