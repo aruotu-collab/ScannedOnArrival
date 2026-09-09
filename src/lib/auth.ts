@@ -1,4 +1,5 @@
 import { createClient, type Session, type SupabaseClient, type User } from "@supabase/supabase-js";
+import { isAppPath, pathForView, viewFromPath } from "./routes";
 
 export function supabaseUrl(): string {
   return (import.meta.env.VITE_SUPABASE_URL ?? "").trim();
@@ -30,7 +31,8 @@ export function getSupabase(): SupabaseClient | null {
 }
 
 export function authRedirectTo(): string {
-  return `${window.location.origin}/`;
+  const path = isAppPath(window.location.pathname) ? pathForView(viewFromPath(window.location.pathname)) : "/";
+  return `${window.location.origin}${path}`;
 }
 
 export async function sendMagicLink(email: string): Promise<void> {

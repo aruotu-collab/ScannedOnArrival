@@ -15,5 +15,15 @@
       "source": "/sw.js",
       "headers": [{ "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }]
     }
+  ],
+  "rewrites": [
+    { "source": "/tree", "destination": "/index.html" },
+    { "source": "/tree/", "destination": "/index.html" },
+    { "source": "/inbox", "destination": "/index.html" },
+    { "source": "/inbox/", "destination": "/index.html" },
+    { "source": "/settings", "destination": "/index.html" },
+    { "source": "/settings/", "destination": "/index.html" },
+    { "source": "/demo", "destination": "/index.html" },
+    { "source": "/demo/", "destination": "/index.html" }
   ]
 }

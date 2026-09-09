@@ -384,7 +384,7 @@ button {
   gap: 4px;
 }
 
-.nav button,
+.nav a,
 .ghost,
 .primary,
 .secondary,
@@ -395,23 +395,25 @@ button {
   background: none;
 }
 
-.nav button {
+.nav a {
   text-align: left;
+  text-decoration: none;
   color: #e8dfcf;
   padding: 11px 12px;
   border-radius: 12px;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  cursor: pointer;
   transition: background 0.22s ease, color 0.22s ease;
 }
 
-.nav button:hover {
+.nav a:hover {
   background: rgba(255, 251, 244, 0.1);
   color: #fff;
 }
 
-.nav button.active {
+.nav a.active {
   background: #fffbf4;
   color: var(--forest);
   font-weight: 800;
@@ -576,6 +578,10 @@ html.nav-css[data-nav-dir="back"] .page-stage {
   background: var(--demo-red);
   color: #fff;
   font-weight: 800;
+  text-decoration: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
 }
 
 .demo-ribbon {
@@ -2759,7 +2765,7 @@ html.nav-css[data-nav-dir="back"] .page-stage {
     z-index: 15;
   }
 
-  .mobile-nav button {
+  .mobile-nav a {
     color: #cfc4ae;
     background: none;
     border: 0;
@@ -2769,10 +2775,14 @@ html.nav-css[data-nav-dir="back"] .page-stage {
     padding: 6px 8px;
     border-radius: 999px;
     white-space: nowrap;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     transition: background 0.22s ease, color 0.22s ease;
   }
 
-  .mobile-nav button.active {
+  .mobile-nav a.active {
     background: #fffbf4;
     color: var(--forest);
     font-weight: 800;

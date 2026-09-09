@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from "react";
 import { createPortal, flushSync } from "react-dom";
 import type {
   AddDraft,
@@ -86,6 +86,7 @@ import {
   userEmail,
   verifyEmailCode,
 } from "./lib/auth";
+import { isAppPath, pathForView, viewFromPath, writeViewUrl } from "./lib/routes";
 import { enableNotifications, listAttention, maybeNotify, type AttentionItem } from "./lib/reminders";
 import { classifySmart } from "./lib/openai";
 import { flattenImageFile } from "./lib/detect";
@@ -340,7 +341,10 @@ export default function App() {
     pages: Array<{ url: string; image: boolean }>;
   } | null>(null);
   const mailboxFiles = useRef(new Map<string, File>());
-  const [view, setView] = useState<ViewId>("documents");
+  const [view, setView] = useState<ViewId>(() => viewFromPath(window.location.pathname));
+  const goToViewRef = useRef<(next: ViewId, opts?: { replace?: boolean; fromPop?: boolean }) => void>(() => {});
+  const viewRef = useRef(view);
+  viewRef.current = view;
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [expandedTypeId, setExpandedTypeId] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
@@ -468,7 +472,7 @@ export default function App() {
         setAddStart("camera");
         setAddOpen(true);
       } else if (openRestore) {
-        setView("settings");
+        goToViewRef.current("settings", { replace: true });
         setReceiveHint(true);
       }
       if (openScan || shared || openRestore) {
@@ -476,7 +480,7 @@ export default function App() {
         url.searchParams.delete("scan");
         url.searchParams.delete("shared");
         url.searchParams.delete("restore");
-        window.history.replaceState({}, "", `${url.pathname}${url.search}`);
+        window.history.replaceState({ view: viewRef.current }, "", `${url.pathname}${url.search}`);
       }
     };
 
@@ -539,7 +543,7 @@ export default function App() {
 
   const openIncomingFile = async (file: File) => {
     if (await fileLooksLikeBackup(file)) {
-      setView("settings");
+      goToViewRef.current("settings", { replace: true });
       await restoreFromFile(file);
       return;
     }
@@ -766,6 +770,7 @@ export default function App() {
 
   const startEmpty = async () => {
     await persistSettings({ ...settings, onboardingComplete: true, showDemoHousehold: false });
+    goToViewRef.current("documents", { replace: true });
   };
 
   const startDemo = async () => {
@@ -777,28 +782,36 @@ export default function App() {
       showDemoHousehold: true,
       people: SAMPLE_PEOPLE,
     });
+    goToViewRef.current("documents", { replace: true });
   };
 
   const startTryDemo = async () => {
     await persistSettings({ ...settings, onboardingComplete: true, showDemoHousehold: false });
-    setView("demo");
+    goToViewRef.current("demo");
   };
 
-  const viewRef = useRef(view);
-  viewRef.current = view;
-
-  const goToView = (next: ViewId) => {
+  const goToView = (next: ViewId, opts?: { replace?: boolean; fromPop?: boolean }) => {
     const target = next === "ready" ? "documents" : next;
     const current = viewRef.current === "ready" ? "documents" : viewRef.current;
-    if (target === current) return;
+    if (target === current) {
+      if (opts?.replace && !opts.fromPop) writeViewUrl(target, "replace");
+      return;
+    }
     if (current === "demo" && target === "documents") setFromDemoNav(true);
 
     const indexOf = (id: ViewId) => (id === "demo" ? -1 : Math.max(0, NAV_ITEMS.findIndex((item) => item.id === id)));
-    const forward = target === "demo" ? true : current === "demo" ? false : indexOf(target) > indexOf(current);
+    const forward = opts?.fromPop
+      ? false
+      : target === "demo"
+        ? true
+        : current === "demo"
+          ? false
+          : indexOf(target) > indexOf(current);
     document.documentElement.dataset.navDir = forward ? "forward" : "back";
 
     const apply = () => {
       flushSync(() => setView(target));
+      if (!opts?.fromPop) writeViewUrl(target, opts?.replace ? "replace" : "push");
       documentsScroller().scrollTo({ top: 0, left: 0, behavior: "auto" });
     };
 
@@ -814,6 +827,22 @@ export default function App() {
     document.documentElement.classList.add("nav-css");
     apply();
   };
+  goToViewRef.current = goToView;
+
+  const onNavClick = (event: MouseEvent<HTMLAnchorElement>, id: ViewId) => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    goToView(id);
+  };
+
+  useEffect(() => {
+    if (!isAppPath(window.location.pathname)) writeViewUrl("documents", "replace");
+    const onPop = () => {
+      goToViewRef.current(viewFromPath(window.location.pathname), { fromPop: true });
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
 
   const openSearchHit = (doc: DocumentRecord) => {
     setDocQuery("");
@@ -826,7 +855,7 @@ export default function App() {
   const openRealThing = () => {
     setDemoLanding(false);
     setFromDemoNav(false);
-    setView("documents");
+    goToView("documents");
     openAdd("camera");
   };
 
@@ -867,7 +896,7 @@ export default function App() {
     setSelectedId(DEMO_DOC_ID);
     setExpandedTypeId("council_tax");
     setDemoLanding(true);
-    setView("documents");
+    goToView("documents");
     setToast("Saved under Home → Council Tax");
   };
 
@@ -916,7 +945,7 @@ export default function App() {
     setAddStart("choose");
     setSelectedId(id);
     setExpandedTypeId(record.typeId);
-    setView("documents");
+    goToView("documents");
     let toastMessage = `${record.title} added`;
     setPendingInboxItem(null);
     setPendingFoundItem(null);
@@ -1210,9 +1239,15 @@ export default function App() {
         </div>
         <nav className="nav">
           {NAV_ITEMS.map(({ id, label }) => (
-            <button key={id} className={view === id ? "active" : ""} onClick={() => goToView(id)}>
+            <a
+              key={id}
+              href={pathForView(id)}
+              className={view === id ? "active" : ""}
+              aria-current={view === id ? "page" : undefined}
+              onClick={(event) => onNavClick(event, id)}
+            >
               {label}
-            </button>
+            </a>
           ))}
         </nav>
         <div className="privacy-card">
@@ -1240,9 +1275,13 @@ export default function App() {
                 {view === "settings" && "Settings"}
               </h1>
               {(view === "documents" || view === "ready") && (
-                <button type="button" className="try-demo-btn" onClick={() => goToView("demo")}>
+                <a
+                  href={pathForView("demo")}
+                  className="try-demo-btn"
+                  onClick={(event) => onNavClick(event, "demo")}
+                >
                   Try Demo
-                </button>
+                </a>
               )}
             </div>
             <p>
@@ -1460,9 +1499,15 @@ export default function App() {
 
       <nav className="mobile-nav">
         {NAV_ITEMS.map(({ id, short }) => (
-          <button key={id} className={view === id ? "active" : ""} onClick={() => goToView(id)}>
+          <a
+            key={id}
+            href={pathForView(id)}
+            className={view === id ? "active" : ""}
+            aria-current={view === id ? "page" : undefined}
+            onClick={(event) => onNavClick(event, id)}
+          >
             {short}
-          </button>
+          </a>
         ))}
       </nav>
 
@@ -4440,7 +4485,7 @@ function RestoreHandoff() {
 
   useEffect(() => {
     if (!visible) return;
-    const url = `${window.location.origin}/?restore=1`;
+    const url = `${window.location.origin}/settings?restore=1`;
     void import("qrcode").then((mod) => {
       const QRCode = mod.default;
       return QRCode.toDataURL(url, {
