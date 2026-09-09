@@ -2,6 +2,7 @@ import { createClient } from "@supabase/supabase-js";
 import {
   jsonResponse,
   requestOrigin,
+  serviceSupabase,
   stripeForm,
   stripeSecret,
   supabaseAnonKey,
@@ -27,7 +28,14 @@ export async function POST(request: Request): Promise<Response> {
     .select("stripe_customer_id")
     .eq("user_id", user.id)
     .maybeSingle();
-  const customer = typeof row?.stripe_customer_id === "string" ? row.stripe_customer_id : "";
+  let customer = typeof row?.stripe_customer_id === "string" ? row.stripe_customer_id : "";
+  if (!customer) {
+    const admin = serviceSupabase();
+    const { data: adminRow } = admin
+      ? await admin.from("plus_subscribers").select("stripe_customer_id").eq("user_id", user.id).maybeSingle()
+      : { data: null };
+    customer = typeof adminRow?.stripe_customer_id === "string" ? adminRow.stripe_customer_id : "";
+  }
   if (!customer) return jsonResponse({ error: "Start Plus first." }, 400);
 
   const params = new URLSearchParams();
@@ -35,6 +43,12 @@ export async function POST(request: Request): Promise<Response> {
   params.set("return_url", `${requestOrigin(request)}/`);
   const { ok, status, body } = await stripeForm("/billing_portal/sessions", params);
   const portal = typeof body.url === "string" ? body.url : "";
-  if (!ok || !portal) return jsonResponse({ error: "Could not open Plus billing." }, status || 502);
+  if (!ok || !portal) {
+    const stripeError =
+      body.error && typeof body.error === "object" && "message" in body.error
+        ? String((body.error as { message?: string }).message)
+        : "";
+    return jsonResponse({ error: stripeError || "Could not open Plus billing." }, status || 502);
+  }
   return jsonResponse({ url: portal });
 }

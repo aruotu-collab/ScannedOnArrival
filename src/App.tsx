@@ -5130,7 +5130,12 @@ function AppNameplate({
           <MenuGlyph open={open} />
           {hello ? <span className="account-hello">Hi {hello}</span> : null}
         </button>
-        <div className="account-menu" id="account-menu" hidden={!open}>
+        <div
+          className="account-menu"
+          id="account-menu"
+          hidden={!open}
+          onClick={(event) => event.stopPropagation()}
+        >
           <AccountCard
             onToast={onToast}
             shareWithDevices={shareWithDevices}
@@ -5240,7 +5245,8 @@ function AccountCard({
                   type="button"
                   className="secondary"
                   disabled={busy !== null}
-                  onClick={() => {
+                  onClick={(event) => {
+                    event.stopPropagation();
                     void (async () => {
                       setBusy("plus");
                       try {
@@ -5253,7 +5259,7 @@ function AccountCard({
                     })();
                   }}
                 >
-                  Manage Plus
+                  {busy === "plus" ? "Opening billing…" : "Manage Plus"}
                 </button>
               ) : !hasPlus ? (
                 <button type="button" className="primary" disabled={busy !== null} onClick={onStartPlus}>
