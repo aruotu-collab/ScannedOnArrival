@@ -111,6 +111,13 @@ button {
   color: inherit;
 }
 
+.app-nameplate-brand {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .account-menu-btn {
   flex-shrink: 0;
   display: inline-flex;
@@ -124,6 +131,25 @@ button {
   border-radius: 8px;
   background: transparent;
   color: inherit;
+}
+
+.account-menu-btn.with-hello {
+  width: auto;
+  max-width: min(46vw, 220px);
+  gap: 6px;
+  padding: 0 2px 0 10px;
+}
+
+.account-hello {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-ui);
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: #f4efe4;
 }
 
 .account-menu-btn:hover,
@@ -2668,6 +2694,14 @@ html.nav-css[data-nav-dir="back"] .page-stage {
     width: 40px;
     height: 40px;
     margin-right: -8px;
+  }
+
+  .account-menu-btn.with-hello {
+    padding: 0 2px 0 12px;
+  }
+
+  .account-hello {
+    font-size: 0.92rem;
   }
 
   .account-menu-glyph {

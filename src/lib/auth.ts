@@ -84,6 +84,13 @@ export function userEmail(user: User | null): string {
   return user?.email?.trim() || "";
 }
 
+export function helloNameFromEmail(email: string): string {
+  const local = email.split("@")[0]?.trim() ?? "";
+  const token = local.split(/[._+\-]/)[0] ?? "";
+  if (!token) return "";
+  return token.charAt(0).toUpperCase() + token.slice(1).toLowerCase();
+}
+
 export function stripAuthParamsFromUrl(): void {
   const url = new URL(window.location.href);
   const keys = ["code", "state", "error", "error_code", "error_description", "type", "token"];

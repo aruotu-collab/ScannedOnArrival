@@ -81,6 +81,7 @@ import {
   onAuthChange,
   sendMagicLink,
   signOutUser,
+  helloNameFromEmail,
   stripAuthParamsFromUrl,
   userEmail,
   verifyEmailCode,
@@ -4501,6 +4502,8 @@ function AppNameplate({ onToast }: { onToast: (msg: string) => void }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [open]);
 
+  const hello = helloNameFromEmail(signedIn);
+
   return (
     <>
       {open && (
@@ -4513,15 +4516,16 @@ function AppNameplate({ onToast }: { onToast: (msg: string) => void }) {
       )}
       <div className="app-nameplate">
         <PhoneGlyph />
-        <span>ScannedOnArrival</span>
+        <span className="app-nameplate-brand">ScannedOnArrival</span>
         <button
           type="button"
-          className="account-menu-btn"
+          className={`account-menu-btn${hello ? " with-hello" : ""}`}
           aria-expanded={open}
           aria-controls="account-menu"
-          aria-label={signedIn ? "Account" : "Sign in"}
+          aria-label={hello ? `Hi ${hello}` : "Sign in"}
           onClick={() => setOpen((current) => !current)}
         >
+          {hello ? <span className="account-hello">Hi {hello}</span> : null}
           <MenuGlyph open={open} />
         </button>
         <div className="account-menu" id="account-menu" hidden={!open}>
