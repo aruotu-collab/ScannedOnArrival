@@ -4,6 +4,8 @@ import { jsonResponse } from "./_lib.js";
 
 export const PLUS_UNIT_AMOUNT = 399;
 export const PLUS_PRODUCT_NAME = "ScannedOnArrival Plus";
+/** SaaS — personal use. Required when Stripe Managed Payments is on. */
+export const PLUS_TAX_CODE = "txcd_10103000";
 
 export function stripeSecret(): string | undefined {
   return process.env.STRIPE_SECRET_KEY?.trim() || undefined;
