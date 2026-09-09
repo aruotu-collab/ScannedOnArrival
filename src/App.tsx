@@ -4525,8 +4525,8 @@ function AppNameplate({ onToast }: { onToast: (msg: string) => void }) {
           aria-label={hello ? `Hi ${hello}` : "Sign in"}
           onClick={() => setOpen((current) => !current)}
         >
-          {hello ? <span className="account-hello">Hi {hello}</span> : null}
           <MenuGlyph open={open} />
+          {hello ? <span className="account-hello">Hi {hello}</span> : null}
         </button>
         <div className="account-menu" id="account-menu" hidden={!open}>
           <AccountCard onToast={onToast} />

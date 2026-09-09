@@ -134,21 +134,25 @@ button {
 }
 
 .account-menu-btn.with-hello {
+  flex-direction: column;
   width: auto;
-  max-width: min(46vw, 220px);
-  gap: 6px;
-  padding: 0 2px 0 10px;
+  height: auto;
+  max-width: min(38vw, 132px);
+  gap: 1px;
+  padding: 1px 0 0;
 }
 
 .account-hello {
-  min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: var(--font-ui);
-  font-size: 0.78rem;
+  font-size: 0.5rem;
   font-weight: 600;
+  line-height: 1.15;
   letter-spacing: 0;
+  text-align: center;
   color: #f4efe4;
 }
 
@@ -2697,11 +2701,11 @@ html.nav-css[data-nav-dir="back"] .page-stage {
   }
 
   .account-menu-btn.with-hello {
-    padding: 0 2px 0 12px;
+    padding: 0 0 1px;
   }
 
   .account-hello {
-    font-size: 0.92rem;
+    font-size: 0.55rem;
   }
 
   .account-menu-glyph {
