@@ -116,6 +116,8 @@ import {
   userEmail,
   verifyEmailCode,
 } from "./lib/auth";
+import { AdminScreen } from "./admin/AdminScreen";
+import { isAdminEmail } from "./lib/admin";
 import { pageTitleForView, trackPage } from "./lib/analytics";
 import { isAppPath, pathForView, viewFromPath, writeViewUrl } from "./lib/routes";
 import {
@@ -1057,7 +1059,8 @@ export default function App() {
   };
 
   const goToView = (next: ViewId, opts?: { replace?: boolean; fromPop?: boolean }) => {
-    const target = next === "ready" ? "documents" : next;
+    let target = next === "ready" ? "documents" : next;
+    if (target === "admin" && !isAdminEmail(accountEmailRef.current)) target = "documents";
     const current = viewRef.current === "ready" ? "documents" : viewRef.current;
     if (target === current) {
       if (opts?.replace && !opts.fromPop) writeViewUrl(target, "replace");
@@ -1110,6 +1113,17 @@ export default function App() {
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    const current = view === "ready" ? "documents" : view;
+    trackPage(pathForView(current), pageTitleForView(current));
+  }, [hydrated]);
+
+  useEffect(() => {
+    if (view !== "admin" || !accountEmail) return;
+    if (!isAdminEmail(accountEmail)) goToView("documents", { replace: true });
+  }, [view, accountEmail]);
 
   const openSearchHit = (doc: DocumentRecord) => {
     setDocQuery("");
@@ -1541,6 +1555,7 @@ export default function App() {
         onOpenRequestHandled={() => setOpenAccount(false)}
         onNeedPlus={askPlus}
         onStartPlus={() => void beginPlusCheckout()}
+        onOpenAdmin={() => goToView("admin")}
       />
       <aside className="sidebar">
         <div className="wordmark">
@@ -1549,7 +1564,10 @@ export default function App() {
           <span>What you have, how current it is, and where it lives.</span>
         </div>
         <nav className="nav">
-          {NAV_ITEMS.map(({ id, label }) => (
+          {(isAdminEmail(accountEmail)
+            ? [...NAV_ITEMS, { id: "admin" as const, label: "Admin", short: "Admin" }]
+            : NAV_ITEMS
+          ).map(({ id, label }) => (
             <a
               key={id}
               href={pathForView(id)}
@@ -1584,6 +1602,7 @@ export default function App() {
                 {view === "tree" && "Document tree"}
                 {view === "inbox" && "Document inbox"}
                 {view === "settings" && "Settings"}
+                {view === "admin" && "Admin"}
               </h1>
               {(view === "documents" || view === "ready") && (
                 <a
@@ -1601,6 +1620,7 @@ export default function App() {
               {view === "tree" && "A filing-cabinet view. Move a file, add a folder, or filter by person. The files can live anywhere."}
               {view === "inbox" && "Letterbox or inbox: both are ways documents arrive. Email stays optional."}
               {view === "settings" && "Sign in so another phone can share this index, or send a file."}
+              {view === "admin" && "Members, paid and free accounts, and who visited — by IP if they are not signed in."}
             </p>
           </div>
         </header>
@@ -1609,7 +1629,7 @@ export default function App() {
             Demo
           </p>
         )}
-        {view !== "demo" && (
+        {view !== "demo" && view !== "admin" && (
           <div className="scan-hero">
             <ScanCta
               onScan={() => {
@@ -1759,6 +1779,13 @@ export default function App() {
               onToast={setToast}
             />
           )}
+          {view === "admin" && !isAdminEmail(accountEmail) && (
+            <div className="card">
+              <h2>Admin</h2>
+              <p className="meta">Sign in with the owner email to open this page.</p>
+            </div>
+          )}
+          {view === "admin" && isAdminEmail(accountEmail) && <AdminScreen />}
           {view === "settings" && (
             <SettingsView
               settings={settings}
@@ -1818,7 +1845,10 @@ export default function App() {
       </main>
 
       <nav className="mobile-nav">
-        {NAV_ITEMS.map(({ id, short }) => (
+        {(isAdminEmail(accountEmail)
+          ? [...NAV_ITEMS, { id: "admin" as const, label: "Admin", short: "Admin" }]
+          : NAV_ITEMS
+        ).map(({ id, short }) => (
           <a
             key={id}
             href={pathForView(id)}
@@ -5086,6 +5116,7 @@ function AppNameplate({
   onOpenRequestHandled,
   onNeedPlus,
   onStartPlus,
+  onOpenAdmin,
 }: {
   onToast: (msg: string) => void;
   shareWithDevices: boolean;
@@ -5097,6 +5128,7 @@ function AppNameplate({
   onOpenRequestHandled: () => void;
   onNeedPlus: (reason: PlusReason) => void;
   onStartPlus: () => void;
+  onOpenAdmin?: () => void;
 }) {
   const [open, setOpen] = useState(() => Boolean(pendingInviteCode()));
   const [signedIn, setSignedIn] = useState("");
@@ -5170,6 +5202,14 @@ function AppNameplate({
             hasPlus={hasPlus}
             onNeedPlus={onNeedPlus}
             onStartPlus={onStartPlus}
+            onOpenAdmin={
+              onOpenAdmin
+                ? () => {
+                    setOpen(false);
+                    onOpenAdmin();
+                  }
+                : undefined
+            }
           />
         </div>
       )}
@@ -5187,6 +5227,7 @@ function AccountCard({
   hasPlus,
   onNeedPlus,
   onStartPlus,
+  onOpenAdmin,
 }: {
   onToast: (msg: string) => void;
   intro?: string;
@@ -5197,6 +5238,7 @@ function AccountCard({
   hasPlus?: boolean;
   onNeedPlus?: (reason: PlusReason) => void;
   onStartPlus?: () => void;
+  onOpenAdmin?: () => void;
 }) {
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
@@ -5306,6 +5348,13 @@ function AccountCard({
             <p className="meta" role="status" style={{ marginTop: 10, color: "#8b2e1f" }}>
               {billingError}
             </p>
+          )}
+          {onOpenAdmin && isAdminEmail(signedIn) && (
+            <div className="row" style={{ marginTop: 12 }}>
+              <button type="button" className="secondary" onClick={onOpenAdmin}>
+                Admin
+              </button>
+            </div>
           )}
           {onShareWithDevices && !member && (
             <div className="share-devices">

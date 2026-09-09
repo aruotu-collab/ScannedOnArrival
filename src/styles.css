@@ -3633,3 +3633,78 @@ html.nav-css[data-nav-dir="back"] .page-stage {
   gap: 10px;
   align-items: center;
 }
+
+.admin-screen {
+  display: grid;
+  gap: 16px;
+}
+
+.admin-facts {
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+}
+
+.admin-card {
+  margin: 0;
+}
+
+.admin-card h2 {
+  margin: 0 0 4px;
+}
+
+.admin-card h3 {
+  margin: 0 0 8px;
+  font-size: 0.95rem;
+}
+
+.admin-table-wrap {
+  overflow: auto;
+  margin-top: 12px;
+}
+
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.86rem;
+}
+
+.admin-table th,
+.admin-table td {
+  text-align: left;
+  padding: 8px 10px 8px 0;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+  word-break: break-word;
+}
+
+.admin-table th {
+  color: var(--ink-soft);
+  font-weight: 600;
+}
+
+.admin-split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-top: 12px;
+}
+
+.admin-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.admin-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.86rem;
+}
+
+@media (max-width: 720px) {
+  .admin-split {
+    grid-template-columns: 1fr;
+  }
+}

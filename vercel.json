@@ -23,6 +23,8 @@
     { "source": "/inbox/", "destination": "/index.html" },
     { "source": "/settings", "destination": "/index.html" },
     { "source": "/settings/", "destination": "/index.html" },
+    { "source": "/admin", "destination": "/index.html" },
+    { "source": "/admin/", "destination": "/index.html" },
     { "source": "/demo", "destination": "/index.html" },
     { "source": "/demo/", "destination": "/index.html" }
   ]

@@ -1,4 +1,4 @@
-export type ViewId = "ready" | "demo" | "documents" | "tree" | "inbox" | "settings";
+export type ViewId = "ready" | "demo" | "documents" | "tree" | "inbox" | "settings" | "admin";
 
 export type PrivacyMode = "local" | "inbox";
 

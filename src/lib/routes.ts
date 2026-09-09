@@ -13,6 +13,8 @@ export function pathForView(view: ViewId): string {
       return "/inbox";
     case "settings":
       return "/settings";
+    case "admin":
+      return "/admin";
     case "demo":
       return "/demo";
     default:
@@ -28,6 +30,8 @@ export function viewFromPath(pathname: string): ViewId {
       return "inbox";
     case "/settings":
       return "settings";
+    case "/admin":
+      return "admin";
     case "/demo":
       return "demo";
     default:
@@ -36,7 +40,7 @@ export function viewFromPath(pathname: string): ViewId {
 }
 
 export function isAppPath(pathname: string): boolean {
-  return ["/tree", "/inbox", "/settings", "/demo", "/"].includes(normalizePath(pathname));
+  return ["/tree", "/inbox", "/settings", "/admin", "/demo", "/"].includes(normalizePath(pathname));
 }
 
 export function hrefForView(view: ViewId, current = window.location.href): string {

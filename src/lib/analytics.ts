@@ -1,3 +1,5 @@
+import { currentSession } from "./auth";
+
 const MEASUREMENT_ID = "G-2FS46KTY94";
 
 type GtagFn = (...args: unknown[]) => void;
@@ -12,12 +14,30 @@ export function analyticsId(): string {
 
 export function trackPage(path: string, title: string): void {
   const send = gtag();
-  if (!send) return;
-  send("event", "page_view", {
-    page_path: path,
-    page_title: title,
-    page_location: `${window.location.origin}${path}`,
-  });
+  if (send) {
+    send("event", "page_view", {
+      page_path: path,
+      page_title: title,
+      page_location: `${window.location.origin}${path}`,
+    });
+  }
+  void reportVisit(path, title);
+}
+
+async function reportVisit(path: string, title: string): Promise<void> {
+  try {
+    const session = await currentSession();
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`;
+    await fetch("/api/admin/visit", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ path, title, referrer: document.referrer || "" }),
+      keepalive: true,
+    });
+  } catch {
+    /* keep the page usable if logging fails */
+  }
 }
 
 export function pageTitleForView(view: string): string {
@@ -30,6 +50,8 @@ export function pageTitleForView(view: string): string {
       return "Settings";
     case "demo":
       return "Demo";
+    case "admin":
+      return "Admin";
     default:
       return "Scan and Docs";
   }
