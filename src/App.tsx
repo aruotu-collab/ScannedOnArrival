@@ -87,6 +87,23 @@ import {
   type HouseholdState,
 } from "./lib/householdCloud";
 import {
+  canTrackType,
+  FREE_REMINDERS,
+  loadPlusState,
+  pageLimit,
+  PLUS_PRICE_LABEL,
+  plusEffective,
+  plusPitch,
+  rememberPlusIntent,
+  seedTrackedTypes,
+  startPlusCheckout,
+  startPlusPortal,
+  takePlusIntent,
+  trackedAttention,
+  type PlusReason,
+  type PlusState,
+} from "./lib/plus";
+import {
   authAvailable,
   getSupabase,
   onAuthChange,
@@ -144,6 +161,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   customTypes: [],
   people: [],
   mailboxSkipped: [],
+  trackedTypeIds: [],
 };
 
 const DEFAULT_CROP: CropInsets = { top: 4, right: 4, bottom: 4, left: 4 };
@@ -397,7 +415,15 @@ export default function App() {
   const [receiveHint, setReceiveHint] = useState(false);
   const [focusDocId, setFocusDocId] = useState<string | null>(null);
   const [personFilter, setPersonFilter] = useState<PersonFilterId>("all");
+  const [plusState, setPlusState] = useState<PlusState | null>(null);
+  const [plusReason, setPlusReason] = useState<PlusReason | null>(null);
+  const [signInPrompt, setSignInPrompt] = useState(false);
+  const [openAccount, setOpenAccount] = useState(false);
   const incomingFileRef = useRef<(file: File) => Promise<void>>(async () => {});
+  const hasPlus = plusEffective(plusState);
+  const hasPlusRef = useRef(hasPlus);
+  hasPlusRef.current = hasPlus;
+  const signInPromptedRef = useRef(false);
 
   useEffect(() => {
     let alive = true;
@@ -417,6 +443,7 @@ export default function App() {
           customTypes: storedSettings?.customTypes ?? [],
           people: storedSettings?.people ?? [],
           mailboxSkipped: storedSettings?.mailboxSkipped ?? [],
+          trackedTypeIds: storedSettings?.trackedTypeIds ?? [],
           inboxAddress: ensureInboxAddress(storedSettings?.inboxAddress),
         };
         setCatalogExtras(next.customCategories, next.customTypes);
@@ -493,6 +520,25 @@ export default function App() {
 
   useEffect(() => {
     if (!hydrated) return;
+    void loadPlusState()
+      .then(setPlusState)
+      .catch(() => setPlusState({ billingReady: false, active: false, subscriber: false }));
+  }, [hydrated, accountEmail]);
+
+  useEffect(() => {
+    if (!accountEmail) return;
+    const intent = takePlusIntent();
+    if (intent) setPlusReason(intent);
+  }, [accountEmail]);
+
+  useEffect(() => {
+    if (!plusState?.billingReady || hasPlus) return;
+    if (settingsRef.current.privacyMode !== "inbox") return;
+    void persistSettings({ ...settingsRef.current, privacyMode: "local" });
+  }, [plusState, hasPlus]);
+
+  useEffect(() => {
+    if (!hydrated) return;
     const params = new URLSearchParams(window.location.search);
     const openScan = params.get("scan") === "1";
     const shared = params.get("shared") === "1";
@@ -518,6 +564,27 @@ export default function App() {
       }
     };
 
+    const plusResult = params.get("plus");
+    if (plusResult === "success") {
+      setToast("Plus is on. Inbox, Gmail, and household invites are included.");
+      const url = new URL(window.location.href);
+      url.searchParams.delete("plus");
+      window.history.replaceState({ view: viewRef.current }, "", `${url.pathname}${url.search}`);
+      void (async () => {
+        for (let i = 0; i < 6; i += 1) {
+          const next = await loadPlusState();
+          setPlusState(next);
+          if (next.active) break;
+          await new Promise((resolve) => window.setTimeout(resolve, 800));
+        }
+      })();
+    } else if (plusResult === "cancel") {
+      setToast("Plus checkout was cancelled.");
+      const url = new URL(window.location.href);
+      url.searchParams.delete("plus");
+      window.history.replaceState({ view: viewRef.current }, "", `${url.pathname}${url.search}`);
+    }
+
     void consumeLaunch();
 
     if (window.launchQueue) {
@@ -532,6 +599,10 @@ export default function App() {
   }, [hydrated]);
 
   const persistSettings = async (next: AppSettings, opts?: { fromCloud?: boolean }) => {
+    if (next.privacyMode === "inbox" && !hasPlusRef.current) {
+      setPlusReason("inbox");
+      return;
+    }
     const previousCloud = cloudSettingsFrom(settingsRef.current);
     const safe = {
       ...next,
@@ -539,6 +610,7 @@ export default function App() {
       customTypes: next.customTypes ?? [],
       people: next.people ?? [],
       mailboxSkipped: next.mailboxSkipped ?? [],
+      trackedTypeIds: next.trackedTypeIds ?? [],
     };
     setCatalogExtras(safe.customCategories, safe.customTypes);
     settingsRef.current = safe;
@@ -546,6 +618,24 @@ export default function App() {
     await saveSettings(safe);
     if (!opts?.fromCloud && JSON.stringify(previousCloud) !== JSON.stringify(cloudSettingsFrom(safe))) {
       scheduleAccountSync();
+    }
+  };
+
+  const askPlus = (reason: PlusReason) => {
+    if (!accountEmailRef.current) {
+      rememberPlusIntent(reason);
+      setSignInPrompt(true);
+      return;
+    }
+    setPlusReason(reason);
+  };
+
+  const beginPlusCheckout = async () => {
+    setPlusReason(null);
+    try {
+      await startPlusCheckout();
+    } catch (err) {
+      setToast(err instanceof Error ? err.message : "Could not start Plus.");
     }
   };
 
@@ -890,7 +980,17 @@ export default function App() {
     [documents, personFilter],
   );
   const currentDocs = visibleDocuments.filter((d) => d.isCurrent);
-  const attention = useMemo(() => listAttention(visibleDocuments), [visibleDocuments]);
+  const attention = useMemo(
+    () =>
+      trackedAttention(
+        listAttention(visibleDocuments),
+        visibleDocuments,
+        settings.trackedTypeIds ?? [],
+        Boolean(accountEmail),
+        hasPlus,
+      ),
+    [visibleDocuments, settings.trackedTypeIds, accountEmail, hasPlus],
+  );
   const searchHits = useMemo(
     () => searchDocuments(visibleDocuments, docQuery, people),
     [visibleDocuments, docQuery, people],
@@ -900,8 +1000,18 @@ export default function App() {
 
   useEffect(() => {
     if (!hydrated || !settings.notificationsEnabled) return;
-    maybeNotify(attention);
-  }, [hydrated, settings.notificationsEnabled, attention]);
+    maybeNotify(accountEmail && !hasPlus ? attention.slice(0, FREE_REMINDERS) : attention);
+  }, [hydrated, settings.notificationsEnabled, attention, accountEmail, hasPlus]);
+
+  useEffect(() => {
+    if (!accountEmail) return;
+    if ((settings.trackedTypeIds ?? []).length > 0) return;
+    const seeded = seedTrackedTypes(documents, settings.trackedTypeIds);
+    if (seeded.length === 0) return;
+    void persistSettings({ ...settings, trackedTypeIds: seeded });
+    // persistSettings is recreated each render; seed only while tracked types are empty.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accountEmail, documents, settings.trackedTypeIds]);
 
   const startEmpty = async () => {
     await persistSettings({ ...settings, onboardingComplete: true, showDemoHousehold: false });
@@ -1074,6 +1184,20 @@ export default function App() {
       }
     }
     await persistDocs(saved);
+    if (record.typeId !== "other") {
+      const tracked = settings.trackedTypeIds ?? [];
+      if (canTrackType(tracked, record.typeId, hasPlusRef.current)) {
+        if (!tracked.includes(record.typeId)) {
+          await persistSettings({ ...settings, trackedTypeIds: [...tracked, record.typeId] });
+        }
+      } else if (accountEmailRef.current) {
+        askPlus("tracked");
+      }
+    }
+    if (!accountEmailRef.current && !signInPromptedRef.current) {
+      signInPromptedRef.current = true;
+      setSignInPrompt(true);
+    }
     setAddOpen(false);
     setIncomingFile(null);
     setIncomingMethod(null);
@@ -1153,6 +1277,10 @@ export default function App() {
   };
 
   const connectMailbox = async (mailbox: "gmail" | "outlook") => {
+    if (!hasPlusRef.current) {
+      askPlus(mailbox === "gmail" ? "gmail" : "outlook");
+      return;
+    }
     if (inboxBusyId) return;
     setInboxBusyId(mailbox);
     setInboxBusyKind("mailbox");
@@ -1364,8 +1492,12 @@ export default function App() {
             </div>
             <AccountCard
               onToast={setToast}
-              intro="Already using this on another phone or computer? Sign in to bring that index here. We email a link — no password."
+              intro="Already using this on another phone or computer? Sign in free so that index follows this email."
               onHouseholdChanged={() => void runAccountSyncRef.current("pull")}
+              plusState={plusState}
+              hasPlus={hasPlus}
+              onNeedPlus={askPlus}
+              onStartPlus={() => void beginPlusCheckout()}
             />
           </div>
         </div>
@@ -1381,6 +1513,12 @@ export default function App() {
         shareWithDevices={shareWithDevices}
         onShareWithDevices={(enabled) => void changeShareWithDevices(enabled)}
         onHouseholdChanged={() => void runAccountSyncRef.current("pull")}
+        plusState={plusState}
+        hasPlus={hasPlus}
+        openRequest={openAccount}
+        onOpenRequestHandled={() => setOpenAccount(false)}
+        onNeedPlus={askPlus}
+        onStartPlus={() => void beginPlusCheckout()}
       />
       <aside className="sidebar">
         <div className="wordmark">
@@ -1567,6 +1705,9 @@ export default function App() {
               inboxReady={inboxReady}
               foundEmail={foundEmail}
               documents={documents}
+              signedIn={Boolean(accountEmail)}
+              hasPlus={hasPlus}
+              onNeedPlus={askPlus}
               onSettings={persistSettings}
               onConfirm={addFromInbox}
               onRemove={removeFromInbox}
@@ -1691,6 +1832,9 @@ export default function App() {
           onSave={addDocument}
           onCreateCategory={createCategory}
           onCreateType={createType}
+          signedIn={Boolean(accountEmail)}
+          plus={hasPlus}
+          onNeedPlus={askPlus}
         />
       )}
       {editingDoc && (
@@ -1714,6 +1858,29 @@ export default function App() {
             label: "Add this file",
             onClick: () => void addFromMailbox(mailboxPreview.item),
           }}
+        />
+      )}
+      {signInPrompt && (
+        <ConfirmDialog
+          title="Keep this with your email?"
+          message="This copy lives in this browser. Sign in free so your computer has the same listings. Plus is $3.99 a month when you want the house, inbox, or Gmail."
+          confirmLabel="Sign in free"
+          confirmKind="primary"
+          onCancel={() => setSignInPrompt(false)}
+          onConfirm={() => {
+            setSignInPrompt(false);
+            setOpenAccount(true);
+          }}
+        />
+      )}
+      {plusReason && (
+        <ConfirmDialog
+          title={plusPitch(plusReason).title}
+          message={plusPitch(plusReason).message}
+          confirmLabel={`Plus · ${PLUS_PRICE_LABEL}`}
+          confirmKind="primary"
+          onCancel={() => setPlusReason(null)}
+          onConfirm={() => void beginPlusCheckout()}
         />
       )}
       {toast && <div className="toast">{toast}</div>}
@@ -2122,12 +2289,14 @@ function ConfirmDialog({
   title,
   message,
   confirmLabel = "Remove",
+  confirmKind = "danger",
   onConfirm,
   onCancel,
 }: {
   title: string;
   message: string;
   confirmLabel?: string;
+  confirmKind?: "danger" | "primary";
   onConfirm: () => void;
   onCancel: () => void;
 }) {
@@ -2149,7 +2318,7 @@ function ConfirmDialog({
           <button type="button" className="secondary" onClick={onCancel}>
             Cancel
           </button>
-          <button type="button" className="danger" onClick={onConfirm}>
+          <button type="button" className={confirmKind} onClick={onConfirm}>
             {confirmLabel}
           </button>
         </div>
@@ -4429,6 +4598,9 @@ function InboxView({
   inboxReady,
   foundEmail,
   documents,
+  signedIn,
+  hasPlus,
+  onNeedPlus,
   onSettings,
   onConfirm,
   onRemove,
@@ -4454,6 +4626,9 @@ function InboxView({
   inboxReady: boolean;
   foundEmail: FoundEmailDoc[];
   documents: DocumentRecord[];
+  signedIn: boolean;
+  hasPlus: boolean;
+  onNeedPlus: (reason: PlusReason) => void;
   onSettings: (s: AppSettings) => Promise<void>;
   onConfirm: (item: InboxItem) => Promise<void>;
   onRemove: (item: InboxItem) => Promise<void>;
@@ -4492,9 +4667,16 @@ function InboxView({
       <div className="card">
         <h2>Two ways to handle email</h2>
         <p className="meta">
-          Private local stays the default. Convenience inbox is opt-in: you get a private address on
+          Private local stays the default. Convenience inbox is Plus: you get a private address on
           inbox.scannedonarrival.com, unique to this device.
         </p>
+        {!hasPlus && (
+          <p className="meta" style={{ marginTop: 10 }}>
+            {signedIn
+              ? `Free accounts remember three important documents. Plus is ${PLUS_PRICE_LABEL} for inbox, Gmail, and one other person.`
+              : `Sign in free to keep listings with your email. Plus is ${PLUS_PRICE_LABEL} for inbox and Gmail.`}
+          </p>
+        )}
         <div className="switch" style={{ marginTop: 14, width: "fit-content" }}>
           <button
             className={!convenience ? "active" : ""}
@@ -4504,7 +4686,13 @@ function InboxView({
           </button>
           <button
             className={convenience ? "active" : ""}
-            onClick={() => onSettings({ ...settings, privacyMode: "inbox" })}
+            onClick={() => {
+              if (!hasPlus) {
+                onNeedPlus("inbox");
+                return;
+              }
+              void onSettings({ ...settings, privacyMode: "inbox" });
+            }}
           >
             Convenience inbox
           </button>
@@ -4631,9 +4819,9 @@ function InboxView({
       <div className="card">
         <h3>{outlookReady ? "Optional Gmail or Outlook" : "Optional Gmail"}</h3>
         <p className="meta">
-          Never required. This stays on this device: you sign in with Google
+          Never required. Gmail and Outlook are Plus. You sign in with Google
           {outlookReady ? " or Microsoft" : ""} in this browser, we look for recent PDF attachments here, then you
-          choose what to add. ScannedOnArrival does not receive your mailbox. Forwarding still works without this.
+          choose what to add. ScannedOnArrival does not receive your mailbox.
         </p>
         {!gmailReady && !outlookReady && (
           <p className="meta" style={{ marginTop: 10 }}>
@@ -4646,7 +4834,13 @@ function InboxView({
               className="secondary"
               type="button"
               disabled={confirmingId !== null}
-              onClick={onConnectGmail}
+              onClick={() => {
+                if (!hasPlus) {
+                  onNeedPlus("gmail");
+                  return;
+                }
+                onConnectGmail();
+              }}
             >
               {confirmingId === "gmail" && busyKind === "mailbox"
                 ? "Looking…"
@@ -4667,7 +4861,13 @@ function InboxView({
               className="secondary"
               type="button"
               disabled={confirmingId !== null}
-              onClick={onConnectOutlook}
+              onClick={() => {
+                if (!hasPlus) {
+                  onNeedPlus("outlook");
+                  return;
+                }
+                onConnectOutlook();
+              }}
             >
               {confirmingId === "outlook" && busyKind === "mailbox"
                 ? "Looking…"
@@ -4858,11 +5058,23 @@ function AppNameplate({
   shareWithDevices,
   onShareWithDevices,
   onHouseholdChanged,
+  plusState,
+  hasPlus,
+  openRequest,
+  onOpenRequestHandled,
+  onNeedPlus,
+  onStartPlus,
 }: {
   onToast: (msg: string) => void;
   shareWithDevices: boolean;
   onShareWithDevices: (enabled: boolean) => void;
   onHouseholdChanged: () => void;
+  plusState: PlusState | null;
+  hasPlus: boolean;
+  openRequest: boolean;
+  onOpenRequestHandled: () => void;
+  onNeedPlus: (reason: PlusReason) => void;
+  onStartPlus: () => void;
 }) {
   const [open, setOpen] = useState(() => Boolean(pendingInviteCode()));
   const [signedIn, setSignedIn] = useState("");
@@ -4876,6 +5088,12 @@ function AppNameplate({
     });
     return onAuthChange((user) => setSignedIn(userEmail(user)));
   }, []);
+
+  useEffect(() => {
+    if (!openRequest) return;
+    setOpen(true);
+    onOpenRequestHandled();
+  }, [openRequest, onOpenRequestHandled]);
 
   useEffect(() => {
     if (!open) return;
@@ -4918,6 +5136,10 @@ function AppNameplate({
             shareWithDevices={shareWithDevices}
             onShareWithDevices={onShareWithDevices}
             onHouseholdChanged={onHouseholdChanged}
+            plusState={plusState}
+            hasPlus={hasPlus}
+            onNeedPlus={onNeedPlus}
+            onStartPlus={onStartPlus}
           />
         </div>
       </div>
@@ -4931,12 +5153,20 @@ function AccountCard({
   shareWithDevices,
   onShareWithDevices,
   onHouseholdChanged,
+  plusState,
+  hasPlus,
+  onNeedPlus,
+  onStartPlus,
 }: {
   onToast: (msg: string) => void;
   intro?: string;
   shareWithDevices?: boolean;
   onShareWithDevices?: (enabled: boolean) => void;
   onHouseholdChanged?: () => void;
+  plusState?: PlusState | null;
+  hasPlus?: boolean;
+  onNeedPlus?: (reason: PlusReason) => void;
+  onStartPlus?: () => void;
 }) {
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
@@ -4999,8 +5229,39 @@ function AccountCard({
           <p className="meta">
             {member
               ? `Signed in as ${signedIn}. You share this index with ${ownerEmail || "the household"}. Papers you add here show up for them too. Inbox and Gmail stay on this device.`
-              : `Signed in as ${signedIn}. When sharing is on, another phone or computer that signs in with this email copies the listings and stored scans. Invite someone with a different email to share the household index.`}
+              : hasPlus
+                ? `Signed in as ${signedIn} with Plus. When sharing is on, another phone or computer that signs in with this email copies the listings and stored scans. Invite one other person to this household.`
+                : `Signed in as ${signedIn}. Free accounts remember three important documents on this email. Plus is ${PLUS_PRICE_LABEL} for the rest — and for one other person, inbox, and Gmail.`}
           </p>
+          {onStartPlus && plusState?.billingReady && !member && (
+            <div className="row" style={{ marginTop: 12 }}>
+              {hasPlus && plusState.subscriber ? (
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={busy !== null}
+                  onClick={() => {
+                    void (async () => {
+                      setBusy("plus");
+                      try {
+                        await startPlusPortal();
+                      } catch (err) {
+                        onToast(err instanceof Error ? err.message : "Could not open Plus billing.");
+                      } finally {
+                        setBusy(null);
+                      }
+                    })();
+                  }}
+                >
+                  Manage Plus
+                </button>
+              ) : !hasPlus ? (
+                <button type="button" className="primary" disabled={busy !== null} onClick={onStartPlus}>
+                  Plus · {PLUS_PRICE_LABEL}
+                </button>
+              ) : null}
+            </div>
+          )}
           {onShareWithDevices && !member && (
             <div className="share-devices">
               <p className="meta">Sync to Other devices</p>
@@ -5063,7 +5324,7 @@ function AccountCard({
                     ))}
                   </ul>
                 )}
-                {invite ? (
+                {invite && hasPlus ? (
                   <div className="household-code">
                     <p className="meta">They sign in with their email, then type this code:</p>
                     <strong>{invite.code}</strong>
@@ -5102,6 +5363,10 @@ function AccountCard({
                       className="secondary"
                       disabled={busy !== null}
                       onClick={() => {
+                        if (!hasPlus) {
+                          onNeedPlus?.("invite");
+                          return;
+                        }
                         void (async () => {
                           setBusy("invite");
                           try {
@@ -5909,6 +6174,9 @@ function AddDocumentModal({
   onCreateCategory,
   onCreateType,
   onCreatePerson,
+  signedIn,
+  plus,
+  onNeedPlus,
 }: {
   documents: DocumentRecord[];
   startAt: "choose" | "camera";
@@ -5923,6 +6191,9 @@ function AddDocumentModal({
   onCreateCategory: (label: string) => Promise<{ categoryId: string; typeId: string }>;
   onCreateType: (label: string, categoryId: string) => Promise<{ typeId: string; categoryId: string }>;
   onCreatePerson: (name: string) => Promise<HouseholdPerson>;
+  signedIn: boolean;
+  plus: boolean;
+  onNeedPlus: (reason: PlusReason) => void;
 }) {
   const [step, setStep] = useState<"choose" | "camera" | "pages" | "crop" | "form" | "replace">(
     incomingFile ? "choose" : startAt,
@@ -6096,15 +6367,27 @@ function AddDocumentModal({
   }, [incomingFile, incomingMethod]);
 
   const addCapturedPage = async (raw: File) => {
+    const limit = pageLimit(signedIn, plus);
+    let blocked = false;
     setBusy(true);
     setBusyLabel("Sharpening the page…");
     try {
       const file = await enhanceDocument(raw);
       const page = { id: uid(), file, url: URL.createObjectURL(file), selected: true };
       setPages((current) => {
+        if (current.length >= limit) {
+          blocked = true;
+          return current;
+        }
         setActivePage(current.length);
         return [...current, page];
       });
+      if (blocked) {
+        URL.revokeObjectURL(page.url);
+        onNeedPlus("pages");
+        setError(`This scan can have ${limit} pages on this plan.`);
+        return;
+      }
       setPending(null);
       setStep("pages");
     } catch (err) {
@@ -6316,7 +6599,16 @@ function AddDocumentModal({
               Use this scan
             </label>
             <div className="scan-pages-actions">
-              <button className="primary" onClick={() => setStep("camera")}>
+              <button
+                className="primary"
+                onClick={() => {
+                  if (pages.length >= pageLimit(signedIn, plus)) {
+                    onNeedPlus("pages");
+                    return;
+                  }
+                  setStep("camera");
+                }}
+              >
                 Add another page
               </button>
               <button

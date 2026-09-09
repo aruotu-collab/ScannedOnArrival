@@ -145,6 +145,7 @@ export interface AppSettings {
   customTypes: CustomTypeDef[];
   people: HouseholdPerson[];
   mailboxSkipped: string[];
+  trackedTypeIds: string[];
 }
 
 export interface AppState {

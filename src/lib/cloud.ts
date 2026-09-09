@@ -11,6 +11,7 @@ export type CloudSettings = {
   customCategories: CategoryDef[];
   customTypes: CustomTypeDef[];
   people: HouseholdPerson[];
+  trackedTypeIds?: string[];
   shareWithDevices?: boolean;
 };
 
@@ -62,6 +63,7 @@ export function cloudSettingsFrom(settings: AppSettings): CloudSettings {
     customCategories: settings.customCategories ?? [],
     customTypes: settings.customTypes ?? [],
     people: settings.people ?? [],
+    trackedTypeIds: settings.trackedTypeIds ?? [],
   };
 }
 
@@ -74,6 +76,7 @@ export function applyCloudSettings(local: AppSettings, cloud: CloudSettings): Ap
     customCategories: cloud.customCategories ?? [],
     customTypes: cloud.customTypes ?? [],
     people: cloud.people ?? [],
+    trackedTypeIds: cloud.trackedTypeIds ?? local.trackedTypeIds ?? [],
   };
 }
 
@@ -127,6 +130,7 @@ export function mergeIndexes(local: CloudPayload, remote: CloudPayload): CloudPa
       customCategories: unionById(local.settings.customCategories, remote.settings.customCategories),
       customTypes: unionById(local.settings.customTypes, remote.settings.customTypes),
       people: unionPeople(local.settings.people, remote.settings.people),
+      trackedTypeIds: [...new Set([...(local.settings.trackedTypeIds ?? []), ...(remote.settings.trackedTypeIds ?? [])])],
     },
   };
 }
@@ -176,6 +180,7 @@ export async function loadCloudIndex(): Promise<CloudRow | null> {
       customCategories: Array.isArray(data.settings?.customCategories) ? data.settings.customCategories : [],
       customTypes: Array.isArray(data.settings?.customTypes) ? data.settings.customTypes : [],
       people: Array.isArray(data.settings?.people) ? data.settings.people : [],
+      trackedTypeIds: Array.isArray(data.settings?.trackedTypeIds) ? data.settings.trackedTypeIds : [],
       shareWithDevices: data.settings?.shareWithDevices !== false,
     },
     updated_at: data.updated_at,
@@ -278,6 +283,7 @@ export async function applyAccountIndex(
     customCategories: merged.settings.customCategories,
     customTypes: merged.settings.customTypes,
     people: merged.settings.people,
+    trackedTypeIds: merged.settings.trackedTypeIds ?? [],
   };
   const sameDocs =
     JSON.stringify(merged.documents) === JSON.stringify(localDocuments) &&
@@ -322,5 +328,5 @@ export async function writeShareWithDevices(
 
 export function isCloudSchemaError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return /user_indexes|household_members|household_invites|household_snapshot|my_household_id|schema cache|does not exist|Could not find the table/i.test(message);
+  return /user_indexes|household_members|household_invites|household_snapshot|my_household_id|plus_subscribers|plus_active|schema cache|does not exist|Could not find the table/i.test(message);
 }
