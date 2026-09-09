@@ -92,7 +92,9 @@ import {
   cloudSettingsFrom,
   cloudSyncAvailable,
   isCloudSchemaError,
+  loadShareWithDevices,
   stampDocumentChanges,
+  writeShareWithDevices,
 } from "./lib/cloud";
 import { enableNotifications, listAttention, maybeNotify, type AttentionItem } from "./lib/reminders";
 import { classifySmart } from "./lib/openai";
@@ -358,6 +360,7 @@ export default function App() {
   const cloudBusyRef = useRef(false);
   const cloudTimerRef = useRef(0);
   const runAccountSyncRef = useRef<(reason: "pull" | "push" | "replace") => Promise<void>>(async () => {});
+  const [shareWithDevices, setShareWithDevices] = useState(true);
   const [view, setView] = useState<ViewId>(() => viewFromPath(window.location.pathname));
   const goToViewRef = useRef<(next: ViewId, opts?: { replace?: boolean; fromPop?: boolean }) => void>(() => {});
   const viewRef = useRef(view);
@@ -579,6 +582,45 @@ export default function App() {
     }
   };
   runAccountSyncRef.current = runAccountSync;
+
+  useEffect(() => {
+    if (!hydrated || !accountEmail) {
+      setShareWithDevices(true);
+      return;
+    }
+    let alive = true;
+    const tick = async () => {
+      try {
+        const allowed = await loadShareWithDevices();
+        if (alive) setShareWithDevices(allowed);
+      } catch {
+        /* keep the last known switch */
+      }
+    };
+    void tick();
+    const id = window.setInterval(() => void tick(), 15000);
+    return () => {
+      alive = false;
+      window.clearInterval(id);
+    };
+  }, [hydrated, accountEmail]);
+
+  const changeShareWithDevices = async (enabled: boolean) => {
+    const previous = shareWithDevices;
+    setShareWithDevices(enabled);
+    try {
+      await writeShareWithDevices(enabled, settingsRef.current, documentsRef.current);
+      if (enabled) void runAccountSyncRef.current("pull");
+      setToast(
+        enabled
+          ? "Other devices that sign in with this email can copy this index."
+          : "Other devices that sign in with this email will not copy this index.",
+      );
+    } catch (err) {
+      setShareWithDevices(previous);
+      setToast(err instanceof Error ? err.message : "Could not update sharing for other devices.");
+    }
+  };
 
   useEffect(() => {
     if (!hydrated || !accountEmail) return;
@@ -1322,7 +1364,11 @@ export default function App() {
 
   return (
     <div className={`app${view === "demo" || demoLanding ? " demo-mode" : ""}`}>
-      <AppNameplate onToast={setToast} />
+      <AppNameplate
+        onToast={setToast}
+        shareWithDevices={shareWithDevices}
+        onShareWithDevices={(enabled) => void changeShareWithDevices(enabled)}
+      />
       <aside className="sidebar">
         <div className="wordmark">
           <ProductBadge tone="dark" />
@@ -4749,7 +4795,15 @@ function MenuGlyph({ open }: { open: boolean }) {
   );
 }
 
-function AppNameplate({ onToast }: { onToast: (msg: string) => void }) {
+function AppNameplate({
+  onToast,
+  shareWithDevices,
+  onShareWithDevices,
+}: {
+  onToast: (msg: string) => void;
+  shareWithDevices: boolean;
+  onShareWithDevices: (enabled: boolean) => void;
+}) {
   const [open, setOpen] = useState(false);
   const [signedIn, setSignedIn] = useState("");
 
@@ -4799,14 +4853,28 @@ function AppNameplate({ onToast }: { onToast: (msg: string) => void }) {
           {hello ? <span className="account-hello">Hi {hello}</span> : null}
         </button>
         <div className="account-menu" id="account-menu" hidden={!open}>
-          <AccountCard onToast={onToast} />
+          <AccountCard
+            onToast={onToast}
+            shareWithDevices={shareWithDevices}
+            onShareWithDevices={onShareWithDevices}
+          />
         </div>
       </div>
     </>
   );
 }
 
-function AccountCard({ onToast, intro }: { onToast: (msg: string) => void; intro?: string }) {
+function AccountCard({
+  onToast,
+  intro,
+  shareWithDevices,
+  onShareWithDevices,
+}: {
+  onToast: (msg: string) => void;
+  intro?: string;
+  shareWithDevices?: boolean;
+  onShareWithDevices?: (enabled: boolean) => void;
+}) {
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
   const [signedIn, setSignedIn] = useState("");
@@ -4841,9 +4909,33 @@ function AccountCard({ onToast, intro }: { onToast: (msg: string) => void; intro
       {signedIn ? (
         <>
           <p className="meta">
-            Signed in as {signedIn}. Listings and stored copies follow this email on other phones and computers
-            that sign in with it. Send and Receive still work if the other device is not signed in.
+            Signed in as {signedIn}. When sharing is on, another phone or computer that signs in with this email
+            copies the listings and stored scans. When it is off, they do not. Send and Receive still work either
+            way.
           </p>
+          {onShareWithDevices && (
+            <div className="share-devices">
+              <p className="meta">Other devices</p>
+              <div className="switch" role="group" aria-label="Let other devices copy this index">
+                <button
+                  type="button"
+                  className={shareWithDevices ? "active" : ""}
+                  aria-pressed={shareWithDevices === true}
+                  onClick={() => onShareWithDevices(true)}
+                >
+                  On
+                </button>
+                <button
+                  type="button"
+                  className={!shareWithDevices ? "active" : ""}
+                  aria-pressed={shareWithDevices === false}
+                  onClick={() => onShareWithDevices(false)}
+                >
+                  Off
+                </button>
+              </div>
+            </div>
+          )}
           <div className="row" style={{ marginTop: 12 }}>
             <button
               type="button"
@@ -5098,7 +5190,7 @@ function SettingsView({
         <h2>This phone and another</h2>
         <p className="meta">
           {signedIn
-            ? `Signed in as ${signedIn}. Listings and stored copies follow this email. Send a file if the other phone is not signed in yet.`
+            ? `Signed in as ${signedIn}. Other devices copy this index only while sharing is on in the account menu. Send a file if the other phone is not signed in yet.`
             : "The index lives in this browser until you sign in. Send this index to the other phone — AirDrop, Messages, or Files — then Receive it there. That replaces the index on that phone. Or sign in on both devices to keep one index."}
         </p>
         {receiveHint && <p className="sync-receive-note">Pick the backup you sent from the other phone.</p>}

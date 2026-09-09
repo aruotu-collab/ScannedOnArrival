@@ -11,6 +11,7 @@ export type CloudSettings = {
   customCategories: CategoryDef[];
   customTypes: CustomTypeDef[];
   people: HouseholdPerson[];
+  shareWithDevices?: boolean;
 };
 
 export type CloudPayload = {
@@ -166,6 +167,7 @@ export async function loadCloudIndex(): Promise<CloudRow | null> {
       customCategories: Array.isArray(data.settings?.customCategories) ? data.settings.customCategories : [],
       customTypes: Array.isArray(data.settings?.customTypes) ? data.settings.customTypes : [],
       people: Array.isArray(data.settings?.people) ? data.settings.people : [],
+      shareWithDevices: data.settings?.shareWithDevices !== false,
     },
     updated_at: data.updated_at,
   };
@@ -253,10 +255,22 @@ export async function applyAccountIndex(
 
   const local = await localCloudPayload(localSettings, localDocuments);
   const remote = await loadCloudIndex();
+  if (remote && remote.settings.shareWithDevices === false) {
+    return { documents: localDocuments, settings: localSettings, changed: false, imported: false };
+  }
   const merged = options.replaceRemote || !remote ? local : mergeIndexes(local, remote);
+  merged.settings.shareWithDevices = remote?.settings.shareWithDevices !== false;
+  const mergedCore = {
+    privacyMode: merged.settings.privacyMode,
+    showDemoHousehold: merged.settings.showDemoHousehold,
+    onboardingComplete: merged.settings.onboardingComplete,
+    customCategories: merged.settings.customCategories,
+    customTypes: merged.settings.customTypes,
+    people: merged.settings.people,
+  };
   const sameDocs =
     JSON.stringify(merged.documents) === JSON.stringify(localDocuments) &&
-    JSON.stringify(merged.settings) === JSON.stringify(cloudSettingsFrom(localSettings));
+    JSON.stringify(mergedCore) === JSON.stringify(cloudSettingsFrom(localSettings));
   const nextSettings = applyCloudSettings(localSettings, merged.settings);
 
   const deletedChanged = JSON.stringify(merged.deleted) !== JSON.stringify(local.deleted);
@@ -275,6 +289,24 @@ export async function applyAccountIndex(
     changed: !sameDocs || nextSettings.onboardingComplete !== localSettings.onboardingComplete,
     imported: merged.documents.some((doc) => !localIds.has(doc.id)),
   };
+}
+
+export async function loadShareWithDevices(): Promise<boolean> {
+  const remote = await loadCloudIndex();
+  if (!remote) return true;
+  return remote.settings.shareWithDevices !== false;
+}
+
+export async function writeShareWithDevices(
+  enabled: boolean,
+  settings: AppSettings,
+  documents: DocumentRecord[],
+): Promise<void> {
+  const remote = await loadCloudIndex();
+  const local = await localCloudPayload(settings, documents);
+  const payload = remote ? mergeIndexes(local, remote) : local;
+  payload.settings.shareWithDevices = enabled;
+  await saveCloudIndex(payload);
 }
 
 export function isCloudSchemaError(error: unknown): boolean {

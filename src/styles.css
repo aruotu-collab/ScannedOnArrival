@@ -167,6 +167,22 @@ button {
   height: 20px;
 }
 
+.share-devices {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.share-devices .meta {
+  margin: 0;
+}
+
+.share-devices .switch {
+  flex-shrink: 0;
+}
+
 .account-menu-back {
   position: fixed;
   inset: 0;
