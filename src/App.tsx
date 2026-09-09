@@ -3104,6 +3104,11 @@ function PageRail({
         aria-label="Document pages"
         onPointerDown={(event) => {
           if (pages.length < 2) return;
+          try {
+            event.currentTarget.setPointerCapture(event.pointerId);
+          } catch {
+            /* capture is optional if the browser already owns the touch */
+          }
           swipeStart.current = { x: event.clientX, y: event.clientY, page: index };
           swipeAxis.current = null;
           swiped.current = false;
@@ -3116,13 +3121,18 @@ function PageRail({
           if (!swipeAxis.current) {
             if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
             swipeAxis.current = Math.abs(dx) > Math.abs(dy) ? "x" : "y";
-            if (swipeAxis.current === "x") {
-              event.currentTarget.setPointerCapture(event.pointerId);
-              setDragging(true);
-            } else {
+            if (swipeAxis.current === "y") {
+              try {
+                event.currentTarget.releasePointerCapture(event.pointerId);
+              } catch {
+                /* capture may already be gone */
+              }
               swipeStart.current = null;
+              setDragging(false);
+              setDragX(0);
               return;
             }
+            setDragging(true);
           }
           if (swipeAxis.current !== "x") return;
           event.stopPropagation();
@@ -3132,6 +3142,12 @@ function PageRail({
         }}
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
+        onTouchStart={(event) => {
+          if (pages.length > 1) event.stopPropagation();
+        }}
+        onTouchMove={(event) => {
+          if (swipeAxis.current === "x") event.stopPropagation();
+        }}
       >
         <div
           className={`page-rail-track${dragging ? " dragging" : ""}`}

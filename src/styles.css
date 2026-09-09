@@ -1326,6 +1326,7 @@ html.nav-css[data-nav-dir="back"] .page-stage {
   display: block;
   min-width: 0;
   padding: 0;
+  touch-action: none;
 }
 
 .page-rail-wrap {
@@ -1345,6 +1346,7 @@ html.nav-css[data-nav-dir="back"] .page-stage {
 
 .page-rail.swipeable {
   cursor: grab;
+  touch-action: none;
 }
 
 .page-rail.swipeable:active {
