@@ -14,8 +14,8 @@ export function AdminScreen() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(true);
 
-  const refresh = async () => {
-    setBusy(true);
+  const refresh = async (quiet = false) => {
+    if (!quiet) setBusy(true);
     setError(null);
     try {
       setData(await loadAdminOverview());
@@ -28,6 +28,8 @@ export function AdminScreen() {
 
   useEffect(() => {
     void refresh();
+    const id = window.setInterval(() => void refresh(true), 15000);
+    return () => window.clearInterval(id);
   }, []);
 
   return (
@@ -68,7 +70,7 @@ export function AdminScreen() {
             </div>
             <div className="fact">
               <strong>{data.guests}</strong>
-              <span>Non-members by IP</span>
+              <span>Guest IPs</span>
             </div>
           </div>
 
@@ -114,8 +116,8 @@ export function AdminScreen() {
           </section>
 
           <section className="card admin-card">
-            <h2>Non-members by IP</h2>
-            <p className="meta">People who used the site without signing in. An IP is dropped from here once that device signs in.</p>
+            <h2>Visitors by IP</h2>
+            <p className="meta">Every address that opened a page, including yours. Signed-in visits show the email.</p>
             <div className="admin-table-wrap">
               <table className="admin-table">
                 <thead>
@@ -124,14 +126,14 @@ export function AdminScreen() {
                     <th>Country</th>
                     <th>Visits</th>
                     <th>Last page</th>
-                    <th>Came from</th>
+                    <th>Account</th>
                     <th>Last seen</th>
                   </tr>
                 </thead>
                 <tbody>
                   {data.guestsList.length === 0 ? (
                     <tr>
-                      <td colSpan={6}>No guest visits stored yet.</td>
+                      <td colSpan={6}>No visits stored yet. Open a page after this is live, then refresh.</td>
                     </tr>
                   ) : (
                     data.guestsList.map((row) => (
@@ -140,7 +142,7 @@ export function AdminScreen() {
                         <td>{row.country || "—"}</td>
                         <td>{row.visits}</td>
                         <td>{row.lastPath}</td>
-                        <td>{row.lastReferrer || "direct"}</td>
+                        <td>{row.email || "guest"}</td>
                         <td>{when(row.lastSeenAt)}</td>
                       </tr>
                     ))

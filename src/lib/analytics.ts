@@ -25,18 +25,29 @@ export function trackPage(path: string, title: string): void {
 }
 
 async function reportVisit(path: string, title: string): Promise<void> {
+  const payload = JSON.stringify({ path, title, referrer: document.referrer || "" });
+  const blob = new Blob([payload], { type: "application/json" });
   try {
-    const session = await currentSession();
+    const session = await Promise.race([
+      currentSession(),
+      new Promise<null>((resolve) => window.setTimeout(() => resolve(null), 1500)),
+    ]);
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`;
-    await fetch("/api/admin/visit", {
+    const response = await fetch("/api/admin/visit", {
       method: "POST",
       headers,
-      body: JSON.stringify({ path, title, referrer: document.referrer || "" }),
+      body: payload,
       keepalive: true,
+      cache: "no-store",
     });
+    if (!response.ok) navigator.sendBeacon?.("/api/admin/visit", blob);
   } catch {
-    /* keep the page usable if logging fails */
+    try {
+      navigator.sendBeacon?.("/api/admin/visit", blob);
+    } catch {
+      /* keep the page usable if logging fails */
+    }
   }
 }
 

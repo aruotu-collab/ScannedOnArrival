@@ -51,6 +51,7 @@ export async function GET(request: Request): Promise<Response> {
       .limit(800),
   ]);
   if (usersError) return jsonResponse({ error: "Could not load members." }, 500);
+  if (visitsResult.error) return jsonResponse({ error: "Could not load visits." }, 500);
   let plusRows = (plusResult.data ?? []) as PlusRow[];
   if (plusResult.error) {
     const fallback = await supabase.from("plus_subscribers").select("user_id, status, current_period_end");
@@ -60,17 +61,14 @@ export async function GET(request: Request): Promise<Response> {
   const plusByUser = new Map(plusRows.map((row) => [row.user_id, row]));
   const lastByEmail = new Map<string, VisitRow>();
   const lastByIp = new Map<string, VisitRow>();
-  const signedIps = new Set<string>();
+  const ipCounts = new Map<string, number>();
+  const emailByIp = new Map<string, string>();
   for (const visit of visits) {
     const email = accountEmailKey(visit.email);
     if (email && !lastByEmail.has(email)) lastByEmail.set(email, visit);
-    if (email && visit.ip) signedIps.add(visit.ip);
-    if (!lastByIp.has(visit.ip)) lastByIp.set(visit.ip, visit);
-  }
-  const guestCounts = new Map<string, number>();
-  for (const visit of visits) {
-    if (visit.email || signedIps.has(visit.ip)) continue;
-    guestCounts.set(visit.ip, (guestCounts.get(visit.ip) ?? 0) + 1);
+    if (visit.ip && !lastByIp.has(visit.ip)) lastByIp.set(visit.ip, visit);
+    if (visit.ip) ipCounts.set(visit.ip, (ipCounts.get(visit.ip) ?? 0) + 1);
+    if (visit.ip && email && !emailByIp.has(visit.ip)) emailByIp.set(visit.ip, email);
   }
 
   type MemberRow = {
@@ -131,7 +129,7 @@ export async function GET(request: Request): Promise<Response> {
   const paid = membersList.filter((row) => row.plan === "Paid").length;
   const today = startOfUtcDay();
   const todayVisits = visits.filter((visit) => visit.created_at >= today);
-  const guestsList = [...guestCounts.entries()]
+  const ipsList = [...ipCounts.entries()]
     .map(([ip, count]) => {
       const last = lastByIp.get(ip);
       return {
@@ -141,9 +139,11 @@ export async function GET(request: Request): Promise<Response> {
         lastSeenAt: last?.created_at ?? "",
         lastPath: last?.path ?? "/",
         lastReferrer: last?.referrer ?? null,
+        email: emailByIp.get(ip) ?? null,
       };
     })
     .sort((a, b) => (a.lastSeenAt < b.lastSeenAt ? 1 : -1));
+  const guests = ipsList.filter((row) => !row.email).length;
 
   return jsonResponse({
     visitsToday: todayVisits.length,
@@ -151,13 +151,13 @@ export async function GET(request: Request): Promise<Response> {
     members: membersList.length,
     paid,
     free: membersList.length - paid,
-    guests: guestsList.length,
+    guests,
     topPaths: countBy(visits.map((visit) => visit.path)).slice(0, 6).map((row) => ({ path: row.key, count: row.count })),
     topReferrers: countBy(visits.map((visit) => visit.referrer || "").filter(Boolean))
       .slice(0, 6)
       .map((row) => ({ referrer: row.key, count: row.count })),
     membersList,
-    guestsList,
+    guestsList: ipsList,
     recentVisits: visits.slice(0, 80).map((visit) => ({
       id: visit.id,
       at: visit.created_at,

@@ -30,11 +30,13 @@ export async function requireAdmin(request: Request): Promise<{ id: string; emai
 }
 
 export function clientIp(request: Request): string {
-  const forwarded = request.headers.get("x-forwarded-for") || "";
+  const forwarded =
+    request.headers.get("x-forwarded-for") || request.headers.get("x-vercel-forwarded-for") || "";
   const first = forwarded.split(",")[0]?.trim();
   return (
     first ||
     request.headers.get("x-real-ip")?.trim() ||
+    request.headers.get("x-vercel-ip")?.trim() ||
     request.headers.get("cf-connecting-ip")?.trim() ||
     "unknown"
   );

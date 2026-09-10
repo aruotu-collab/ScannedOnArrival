@@ -1147,10 +1147,17 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!hydrated) return;
-    const current = view === "ready" ? "documents" : view;
+    if (!hydrated || !authReady) return;
+    const current = viewRef.current === "ready" ? "documents" : viewRef.current;
     trackPage(pathForView(current), pageTitleForView(current));
-  }, [hydrated]);
+    const onVis = () => {
+      if (document.visibilityState !== "visible") return;
+      const next = viewRef.current === "ready" ? "documents" : viewRef.current;
+      trackPage(pathForView(next), pageTitleForView(next));
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, [hydrated, authReady]);
 
   useEffect(() => {
     if (view !== "admin" || !accountEmail) return;
@@ -1671,7 +1678,7 @@ export default function App() {
               {view === "tree" && "A filing-cabinet view. Move a file, add a folder, or filter by person. The files can live anywhere."}
               {view === "inbox" && "Letterbox or inbox: both are ways documents arrive. Email stays optional."}
               {view === "settings" && "The same email is one account on every phone and computer."}
-              {view === "admin" && "Members, paid and free accounts, and who visited — by IP if they are not signed in."}
+              {view === "admin" && "Members, paid and free accounts, every visitor IP, and recent pages."}
             </p>
           </div>
         </header>

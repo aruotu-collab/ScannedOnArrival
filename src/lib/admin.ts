@@ -26,6 +26,7 @@ export type AdminGuest = {
   lastSeenAt: string
   lastPath: string
   lastReferrer: string | null
+  email?: string | null
 };
 
 export type AdminVisit = {
