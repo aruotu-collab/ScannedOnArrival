@@ -1,5 +1,11 @@
 import { useEffect, useState } from "react";
-import { loadAdminOverview, type AdminOverview } from "../lib/admin";
+import {
+  loadAdminMessages,
+  loadAdminOverview,
+  replyToContactMessage,
+  type AdminOverview,
+  type ContactMessage,
+} from "../lib/admin";
 import { formatPlusDay } from "../lib/plus";
 
 function when(iso: string | null | undefined): string {
@@ -11,14 +17,22 @@ function when(iso: string | null | undefined): string {
 
 export function AdminScreen() {
   const [data, setData] = useState<AdminOverview | null>(null);
+  const [messages, setMessages] = useState<ContactMessage[]>([]);
+  const [openCount, setOpenCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(true);
+  const [replyById, setReplyById] = useState<Record<string, string>>({});
+  const [replyBusy, setReplyBusy] = useState<string | null>(null);
+  const [replyError, setReplyError] = useState<string | null>(null);
 
   const refresh = async (quiet = false) => {
     if (!quiet) setBusy(true);
     setError(null);
     try {
-      setData(await loadAdminOverview());
+      const [overview, inbox] = await Promise.all([loadAdminOverview(), loadAdminMessages()]);
+      setData(overview);
+      setMessages(inbox.messages);
+      setOpenCount(inbox.open);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load admin.");
     } finally {
@@ -31,6 +45,22 @@ export function AdminScreen() {
     const id = window.setInterval(() => void refresh(true), 15000);
     return () => window.clearInterval(id);
   }, []);
+
+  const sendReply = async (id: string) => {
+    const reply = (replyById[id] ?? "").trim();
+    if (!reply) return;
+    setReplyBusy(id);
+    setReplyError(null);
+    try {
+      await replyToContactMessage(id, reply);
+      setReplyById((current) => ({ ...current, [id]: "" }));
+      await refresh(true);
+    } catch (err) {
+      setReplyError(err instanceof Error ? err.message : "Could not send that reply.");
+    } finally {
+      setReplyBusy(null);
+    }
+  };
 
   return (
     <div className="admin-screen">
@@ -72,7 +102,66 @@ export function AdminScreen() {
               <strong>{data.guests}</strong>
               <span>Guest IPs</span>
             </div>
+            <div className="fact">
+              <strong>{openCount}</strong>
+              <span>Open messages</span>
+            </div>
           </div>
+
+          <section className="card admin-card">
+            <h2>Contact messages</h2>
+            <p className="meta">People who used Contact us. Reply here and it emails them at the address they gave.</p>
+            {replyError && (
+              <p className="meta" role="status" style={{ color: "#8b2e1f" }}>
+                {replyError}
+              </p>
+            )}
+            {messages.length === 0 ? (
+              <p className="meta">No messages yet.</p>
+            ) : (
+              <div className="admin-messages">
+                {messages.map((row) => (
+                  <article key={row.id} className="admin-message">
+                    <header>
+                      <strong>{row.name ? `${row.name} · ${row.email}` : row.email}</strong>
+                      <span>
+                        {row.status === "replied" ? "Replied" : "Open"} · {when(row.created_at)}
+                        {row.ip ? ` · ${row.ip}` : ""}
+                        {row.country ? ` · ${row.country}` : ""}
+                      </span>
+                    </header>
+                    <p>{row.message}</p>
+                    {row.reply_text && (
+                      <p className="admin-reply-sent">
+                        <strong>You replied {when(row.replied_at)}</strong>
+                        {row.reply_text}
+                      </p>
+                    )}
+                    {row.status !== "replied" && (
+                      <div className="admin-reply">
+                        <label className="field">
+                          <span>Reply to {row.email}</span>
+                          <textarea
+                            rows={4}
+                            value={replyById[row.id] ?? ""}
+                            onChange={(e) => setReplyById((current) => ({ ...current, [row.id]: e.target.value }))}
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          className="primary"
+                          disabled={replyBusy !== null || !(replyById[row.id] ?? "").trim()}
+                          onClick={() => void sendReply(row.id)}
+                        >
+                          {replyBusy === row.id ? "Sending…" : "Send reply"}
+                        </button>
+                      </div>
+                    )}
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
 
           <section className="card admin-card">
             <h2>Members</h2>

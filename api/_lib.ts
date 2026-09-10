@@ -155,6 +155,41 @@ export async function deleteReceivedEmail(emailId: string): Promise<{ deleted: b
   return { deleted: ok || status === 404, status };
 }
 
+export async function sendResendEmail(input: {
+  from: string;
+  to: string[];
+  replyTo?: string;
+  subject: string;
+  text: string;
+}): Promise<{ ok: boolean; error?: string }> {
+  const { ok, body } = await resendJson<{ message?: string }>(`/emails`, {
+    method: "POST",
+    body: JSON.stringify({
+      from: input.from,
+      to: input.to,
+      reply_to: input.replyTo,
+      subject: input.subject,
+      text: input.text,
+    }),
+  });
+  return { ok, error: body.message };
+}
+
+export function contactFromAddress(): string {
+  return process.env.CONTACT_FROM?.trim() || "ScannedOnArrival <hello@scannedonarrival.com>";
+}
+
+export async function sendContactMail(input: {
+  to: string[];
+  replyTo?: string;
+  subject: string;
+  text: string;
+}): Promise<{ ok: boolean; error?: string }> {
+  const first = await sendResendEmail({ ...input, from: contactFromAddress() });
+  if (first.ok) return first;
+  return sendResendEmail({ ...input, from: "ScannedOnArrival <onboarding@resend.dev>" });
+}
+
 export function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,

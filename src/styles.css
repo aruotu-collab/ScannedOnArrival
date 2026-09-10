@@ -3708,3 +3708,63 @@ html.nav-css[data-nav-dir="back"] .page-stage {
     grid-template-columns: 1fr;
   }
 }
+
+.honeypot {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+.contact-form textarea {
+  min-height: 140px;
+  resize: vertical;
+}
+
+.admin-messages {
+  margin-top: 12px;
+}
+
+.admin-message {
+  padding: 14px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.admin-message header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 8px;
+}
+
+.admin-message header span,
+.admin-message p {
+  margin: 0;
+  white-space: pre-wrap;
+  font-size: 0.9rem;
+}
+
+.admin-message header span {
+  color: var(--ink-soft);
+  font-size: 0.8rem;
+  white-space: normal;
+}
+
+.admin-reply {
+  margin-top: 12px;
+}
+
+.admin-reply-sent {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: #e6f2ea;
+  border-radius: 12px;
+  white-space: pre-wrap;
+}
+
+.admin-reply-sent strong {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 0.8rem;
+}

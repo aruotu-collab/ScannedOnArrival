@@ -66,3 +66,47 @@ export async function loadAdminOverview(): Promise<AdminOverview> {
   if (!response.ok) throw new Error(body.error || "Could not load admin.");
   return body;
 }
+
+export type ContactMessage = {
+  id: string
+  created_at: string
+  email: string
+  name: string | null
+  message: string
+  status: string
+  reply_text: string | null
+  replied_at: string | null
+  ip: string | null
+  country: string | null
+};
+
+export async function loadAdminMessages(): Promise<{ open: number; messages: ContactMessage[] }> {
+  const session = await currentSession();
+  const token = session?.access_token;
+  if (!token) throw new Error("Sign in first.");
+  const response = await fetch("/api/admin/messages", {
+    cache: "no-store",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const body = (await response.json().catch(() => ({}))) as {
+    open?: number
+    messages?: ContactMessage[]
+    error?: string
+  };
+  if (!response.ok) throw new Error(body.error || "Could not load messages.");
+  return { open: body.open ?? 0, messages: body.messages ?? [] };
+}
+
+export async function replyToContactMessage(id: string, reply: string): Promise<void> {
+  const session = await currentSession();
+  const token = session?.access_token;
+  if (!token) throw new Error("Sign in first.");
+  const response = await fetch("/api/admin/reply", {
+    method: "POST",
+    cache: "no-store",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ id, reply }),
+  });
+  const body = (await response.json().catch(() => ({}))) as { error?: string };
+  if (!response.ok) throw new Error(body.error || "Could not send that reply.");
+}

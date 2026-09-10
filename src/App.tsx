@@ -117,6 +117,7 @@ import {
   verifyEmailCode,
 } from "./lib/auth";
 import { AdminScreen } from "./admin/AdminScreen";
+import { ContactForm } from "./contact/ContactForm";
 import { isAdminEmail } from "./lib/admin";
 import { pageTitleForView, trackPage } from "./lib/analytics";
 import { isAppPath, pathForView, viewFromPath, writeViewUrl } from "./lib/routes";
@@ -181,6 +182,7 @@ const NAV_ITEMS: Array<{ id: ViewId; label: string; short: string }> = [
   { id: "tree", label: "Tree", short: "Tree" },
   { id: "inbox", label: "Inbox", short: "Inbox" },
   { id: "settings", label: "Settings", short: "Settings" },
+  { id: "contact", label: "Contact us", short: "Contact" },
 ];
 
 function slugifyCatalogId(label: string, used: Set<string>): string {
@@ -1100,12 +1102,13 @@ export default function App() {
     }
     if (current === "demo" && target === "documents") setFromDemoNav(true);
 
-    const indexOf = (id: ViewId) => (id === "demo" ? -1 : Math.max(0, NAV_ITEMS.findIndex((item) => item.id === id)));
+    const indexOf = (id: ViewId) =>
+      id === "demo" || id === "contact" ? -1 : Math.max(0, NAV_ITEMS.findIndex((item) => item.id === id));
     const forward = opts?.fromPop
       ? false
-      : target === "demo"
+      : target === "demo" || target === "contact"
         ? true
-        : current === "demo"
+        : current === "demo" || current === "contact"
           ? false
           : indexOf(target) > indexOf(current);
     document.documentElement.dataset.navDir = forward ? "forward" : "back";
@@ -1528,6 +1531,27 @@ export default function App() {
     );
   }
 
+  if (view === "contact" && !settings.onboardingComplete) {
+    return (
+      <>
+        <div className="onboarding">
+          <div className="onboarding-card">
+            <ProductBadge />
+            <p className="kicker">ScannedOnArrival</p>
+            <h1>Contact us</h1>
+            <ContactForm defaultEmail={accountEmail} onToast={setToast} />
+            <div className="row" style={{ marginTop: 16 }}>
+              <button type="button" className="secondary" onClick={() => goToView("documents")}>
+                Back
+              </button>
+            </div>
+          </div>
+        </div>
+        {toast && <div className="toast">{toast}</div>}
+      </>
+    );
+  }
+
   if (accountEmail && !settings.onboardingComplete) {
     return (
       <>
@@ -1593,6 +1617,11 @@ export default function App() {
               onNeedPlus={askPlus}
               onStartPlus={() => void beginPlusCheckout()}
             />
+            <p className="meta" style={{ marginTop: 16 }}>
+              <button type="button" className="secondary" onClick={() => goToView("contact")}>
+                Contact us
+              </button>
+            </p>
           </div>
         </div>
         {toast && <div className="toast">{toast}</div>}
@@ -1660,6 +1689,7 @@ export default function App() {
                 {view === "tree" && "Document tree"}
                 {view === "inbox" && "Document inbox"}
                 {view === "settings" && "Settings"}
+                {view === "contact" && "Contact us"}
                 {view === "admin" && "Admin"}
               </h1>
               {(view === "documents" || view === "ready") && (
@@ -1678,7 +1708,8 @@ export default function App() {
               {view === "tree" && "A filing-cabinet view. Move a file, add a folder, or filter by person. The files can live anywhere."}
               {view === "inbox" && "Letterbox or inbox: both are ways documents arrive. Email stays optional."}
               {view === "settings" && "The same email is one account on every phone and computer."}
-              {view === "admin" && "Members, paid and free accounts, every visitor IP, and recent pages."}
+              {view === "contact" && "Send a question or comment. We reply to the email you give us."}
+              {view === "admin" && "Members, paid and free accounts, contact messages, every visitor IP, and recent pages."}
             </p>
           </div>
         </header>
@@ -1844,6 +1875,12 @@ export default function App() {
             </div>
           )}
           {view === "admin" && isAdminEmail(accountEmail) && <AdminScreen />}
+          {view === "contact" && (
+            <div className="card">
+              <h2>Contact us</h2>
+              <ContactForm defaultEmail={accountEmail} onToast={setToast} />
+            </div>
+          )}
           {view === "settings" && (
             <SettingsView
               settings={settings}
@@ -5913,6 +5950,10 @@ function SettingsView({
           </div>
         )}
         <RestoreHandoff />
+      </div>
+      <div className="card">
+        <h2>Contact us</h2>
+        <ContactForm defaultEmail={signedIn} onToast={onToast} />
       </div>
       <div className="card">
         <h3>This device</h3>

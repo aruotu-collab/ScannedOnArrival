@@ -3,7 +3,7 @@ import { jsonResponse } from "./_lib.js";
 
 export const ADMIN_EMAIL = "aruotu@gmail.com";
 
-const ALLOWED_PATHS = new Set(["/", "/tree", "/inbox", "/settings", "/demo", "/admin"]);
+const ALLOWED_PATHS = new Set(["/", "/tree", "/inbox", "/settings", "/demo", "/admin", "/contact"]);
 
 export function accountEmailKey(raw: string | null | undefined): string {
   const trimmed = (raw || "").trim().toLowerCase();

@@ -63,6 +63,8 @@ export function pageTitleForView(view: string): string {
       return "Demo";
     case "admin":
       return "Admin";
+    case "contact":
+      return "Contact us";
     default:
       return "Scan and Docs";
   }

@@ -11,6 +11,11 @@
     <priority>0.6</priority>
   </url>
   <url>
+    <loc>https://www.scannedonarrival.com/contact</loc>
+    <changefreq>monthly</changefreq>
+    <priority>0.5</priority>
+  </url>
+  <url>
     <loc>https://www.scannedonarrival.com/tree</loc>
     <changefreq>weekly</changefreq>
     <priority>0.5</priority>
