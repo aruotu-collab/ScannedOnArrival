@@ -3641,6 +3641,28 @@ html.nav-css[data-nav-dir="back"] .page-stage {
 
 .admin-facts {
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  margin: 0;
+}
+
+button.admin-tab {
+  appearance: none;
+  border: 1px solid transparent;
+  background: #f3ead7;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+
+button.admin-tab:hover,
+button.admin-tab:focus-visible {
+  border-color: #c9b896;
+}
+
+button.admin-tab.active {
+  background: #fff;
+  border-color: var(--ink, #1b3a2f);
+  box-shadow: 0 0 0 1px var(--ink, #1b3a2f);
 }
 
 .admin-card {
